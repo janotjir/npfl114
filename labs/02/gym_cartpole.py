@@ -23,6 +23,11 @@ parser.add_argument("--epochs", default=None, type=int, help="Number of epochs."
 parser.add_argument("--model", default="gym_cartpole_model.h5", type=str, help="Output model path.")
 
 
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
+
 def evaluate_model(
     model: tf.keras.Model, seed: int = 42, episodes: int = 100, render: bool = False, report_per_episode: bool = False
 ) -> float:
