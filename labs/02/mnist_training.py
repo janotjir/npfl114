@@ -88,8 +88,29 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     #   in `model.optimizer._learning_rate` if needed), so after training, the learning rate
     #   should be close to `args.learning_rate_final`.
 
+    steps = mnist.train.size / args.batch_size * args.epochs
+
+    if args.decay == "linear":
+        decay = tf.optimizers.schedules.PolynomialDecay(args.learning_rate, steps, end_learning_rate=args.learning_rate_final)
+    elif args.decay == "exponential":
+        decay = tf.optimizers.schedules.ExponentialDecay(args.learning_rate, steps, args.learning_rate_final / args.learning_rate)
+    elif args.decay == "cosine":
+        decay = tf.optimizers.schedules.CosineDecay(args.learning_rate, steps, args.learning_rate_final / args.learning_rate)
+    else:
+        decay = args.learning_rate
+
+    if args.optimizer == "Adam":
+        opt = tf.optimizers.Adam(learning_rate=decay)
+    elif args.optimizer == "SGD":
+        if args.momentum is None:
+            args.momentum = 0.0
+        opt = tf.optimizers.SGD(learning_rate=decay, momentum=args.momentum)
+    else:
+        print("Unknown optimizer settings")
+        opt = None
+
     model.compile(
-        optimizer=...,
+        optimizer=opt,
         loss=tf.losses.SparseCategoricalCrossentropy(),
         metrics=[tf.metrics.SparseCategoricalAccuracy("accuracy")],
     )
