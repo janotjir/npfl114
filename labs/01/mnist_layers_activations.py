@@ -54,6 +54,10 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     #   from `args.activation`, allowing "none", "relu", "tanh", "sigmoid".
     # - finally, add an output fully connected layer with  `MNIST.LABELS` units
     #   and `tf.nn.softmax` activation.
+    model.add(tf.keras.layers.Flatten())
+    for i in range(args.hidden_layers):
+        model.add(tf.keras.layers.Dense(args.hidden_layer, activation=(args.activation if args.activation != "none" else None)))
+    model.add(tf.keras.layers.Dense(MNIST.LABELS, activation=tf.nn.softmax))
 
     model.compile(
         optimizer=tf.optimizers.Adam(jit_compile=False),

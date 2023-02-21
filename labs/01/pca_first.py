@@ -39,35 +39,38 @@ def main(args: argparse.Namespace) -> Tuple[float, float]:
     # We want to reshape it to [args.examples, MNIST.H * MNIST.W * MNIST.C].
     # We can do so using `tf.reshape(data, new_shape)` with new shape
     # `[data.shape[0], data.shape[1] * data.shape[2] * data.shape[3]]`.
-    data = ...
+    data = tf.reshape(data, [data.shape[0], data.shape[1]*data.shape[2]*data.shape[3]])
 
     # TODO: Now compute mean of every feature. Use `tf.math.reduce_mean`,
     # and set `axis` to zero -- therefore, the mean will be computed
     # across the first dimension, so across examples.
-    mean = ...
+    mean = tf.math.reduce_mean(data, axis=0)
 
     # TODO: Compute the covariance matrix. The covariance matrix is
     #   (data - mean)^T * (data - mean) / data.shape[0]
     # where transpose can be computed using `tf.transpose` and matrix
     # multiplication using either Python operator @ or `tf.linalg.matmul`.
-    cov = ...
+    cov = tf.transpose(data-mean) @ (data-mean) / data.shape[0]
 
     # TODO: Compute the total variance, which is the sum of the diagonal
     # of the covariance matrix. To extract the diagonal use `tf.linalg.diag_part`,
     # and to sum a tensor use `tf.math.reduce_sum`.
-    total_variance = ...
+    total_variance = tf.math.reduce_sum(tf.linalg.diag_part(cov))
 
     # TODO: Now run `args.iterations` of the power iteration algorithm.
     # Start with a vector of `cov.shape[0]` ones of type `tf.float32` using `tf.ones`.
-    v = ...
+    v = tf.ones(cov.shape[0], dtype=tf.float32)
     for i in range(args.iterations):
         # TODO: In the power iteration algorithm, we compute
         # 1. v = cov v
         #    The matrix-vector multiplication can be computed using `tf.linalg.matvec`.
+        v = tf.linalg.matvec(cov, v)
         # 2. s = l2_norm(v)
         #    The l2_norm can be computed using `tf.linalg.norm`.
+        s = tf.linalg.norm(v)
         # 3. v = v / s
-        pass
+        v = v / s
+        #pass
 
     # The `v` is now approximately the eigenvector of the largest eigenvalue, `s`.
     # We now compute the explained variance, which is the ratio of `s` and `total_variance`.
