@@ -18,8 +18,8 @@ parser.add_argument("--render", default=False, action="store_true", help="Render
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
-parser.add_argument("--batch_size", default=None, type=int, help="Batch size.")
-parser.add_argument("--epochs", default=None, type=int, help="Number of epochs.")
+parser.add_argument("--batch_size", default=10, type=int, help="Batch size.")
+parser.add_argument("--epochs", default=40, type=int, help="Number of epochs.")
 parser.add_argument("--model", default="gym_cartpole_model.h5", type=str, help="Output model path.")
 
 
@@ -90,9 +90,9 @@ def main(args: argparse.Namespace) -> Optional[tf.keras.Model]:
         # - binary classification with 1 output and sigmoid activation;
         # - two-class classification with 2 outputs and softmax activation.
         model = tf.keras.Sequential()
-        model.add(tf.keras.layers.Dense(32, activation='relu'))
-        model.add(tf.keras.layers.Dense(64, activation='relu'))
-        model.add(tf.keras.layers.Dense(128, activation='relu'))
+        model.add(tf.keras.layers.Dense(32, activation='tanh', kernel_regularizer=tf.keras.regularizers.L2(1e-3)))
+        model.add(tf.keras.layers.Dense(64, activation='tanh', kernel_regularizer=tf.keras.regularizers.L2(1e-3)))
+        model.add(tf.keras.layers.Dense(128, activation='tanh', kernel_regularizer=tf.keras.regularizers.L2(1e-3)))
         model.add(tf.keras.layers.Dense(2, activation=tf.nn.softmax))
 
         # TODO: Prepare the model for training using the `model.compile` method.
