@@ -63,9 +63,11 @@ class Model(tf.Module):
         # return not only the output layer, but also the hidden layer after applying
         # `tf.nn.tanh`, and the input layer after reshaping.
         inputs = tf.reshape(inputs, [inputs.shape[0], -1])
-        layer1 = tf.nn.tanh(inputs @ self._W1 + self._b1)
-        layer2 = tf.nn.softmax(layer1 @ self._W2 + self._b2)
-        return inputs, layer1, layer2
+        layer1 = inputs @ self._W1 + self._b1
+        activ1 = tf.nn.tanh(layer1)
+        layer2 = activ1 @ self._W2 + self._b2
+        out = tf.nn.softmax(layer2)
+        return inputs, activ1, out
 
     def train_epoch(self, dataset: MNIST.Dataset) -> None:
         for batch in dataset.batches(self._args.batch_size):
@@ -100,18 +102,37 @@ class Model(tf.Module):
             # or with
             #   `tf.einsum("ai,aj->aij", A, B)`
 
+            #print(input.shape, hidden.shape, output.shape)
+
+            wrt_layer2 = output - tf.one_hot(batch["labels"], MNIST.LABELS)
+            #print(wrt_layer2.shape)
+            wrt_activ1 = wrt_layer2 @ tf.transpose(self._W2)
+            #print(wrt_activ1.shape)
+            wrt_W2 = hidden[:, :, tf.newaxis] @ wrt_layer2[:, tf.newaxis, :]
+            #print(wrt_W2.shape, self._W2.shape)
+            wrt_b2 = wrt_layer2
+            #print(wrt_b2.shape, self._b2.shape)
+
+            wrt_layer1 = wrt_activ1 * (1 - hidden**2)
+            wrt_W1 = input[:, :, tf.newaxis] @ wrt_layer1[:, tf.newaxis, :]
+            wrt_b1 = wrt_layer1
+
             # TODO(sgd_backpropagation): Perform the SGD update with learning rate `self._args.learning_rate`
             # for the variable and computed gradient. You can modify
             # variable value with `variable.assign` or in this case the more
             # efficient `variable.assign_sub`.
-            ...
+            
+            self._W1.assign_sub(self._args.learning_rate * tf.reduce_mean(wrt_W1, 0))
+            self._b1.assign_sub(self._args.learning_rate * tf.reduce_mean(wrt_b1, 0))
+            self._W2.assign_sub(self._args.learning_rate * tf.reduce_mean(wrt_W2, 0))
+            self._b2.assign_sub(self._args.learning_rate * tf.reduce_mean(wrt_b2, 0))
 
     def evaluate(self, dataset: MNIST.Dataset) -> float:
         # Compute the accuracy of the model prediction
         correct = 0
         for batch in dataset.batches(self._args.batch_size):
             # TODO(sgd_backpropagation): Compute the probabilities of the batch images
-            probabilities = self.predict(batch["images"])
+            _, _, probabilities = self.predict(batch["images"])
 
             # TODO(sgd_backpropagation): Evaluate how many batch examples were predicted
             # correctly and increase `correct` variable accordingly.
