@@ -37,13 +37,7 @@
   - With an **Intel** processor, you do not need anything special.
 
   - If you have **Apple Silicon**, you need to replace the `tensorflow~=2.11.0` package
-    by `tensorflow-macos~=2.11.0 grpcio~=1.52.0rc1`.
-
-    - The `grpcio` currently needs to be added because versions prior to `1.52`
-      are not compiled for Apple Silicon, and the version `1.52.0rc1` is
-      a pre-release version and so you must explicitly ask for it. Once the
-      version `1.52` is officially released, the `grpcio` package can be omitted
-      from the installation list.
+    by `tensorflow-macos~=2.11.0`.
 
 - _**GPU** support on Linux_
 
@@ -77,10 +71,10 @@
 
 - _How to install TensorFlow dependencies on MetaCentrum?_
 
-  To install CUDA, cuDNN and Python 3.8 on MetaCentrum, it is enough to run
+  To install CUDA, cuDNN and Python 3.10 on MetaCentrum, it is enough to run
   in every session the following command:
   ```
-  module add python/3.8.0-gcc-rab6t cuda/cuda-11.2.0-intel-19.0.4-tn4edsz cudnn/cudnn-8.1.0.77-11.2-linux-x64-intel-19.0.4-wx22b5t
+  module add python/python-3.10.4-intel-19.0.4-sc7snnf cuda/cuda-11.2.0-intel-19.0.4-tn4edsz cudnn/cudnn-8.1.0.77-11.2-linux-x64-intel-19.0.4-wx22b5t
   ```
 
 - _How to install TensorFlow on MetaCentrum?_
