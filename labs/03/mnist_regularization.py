@@ -25,6 +25,10 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--weight_decay", default=0, type=float, help="Weight decay strength.")
 # If you add more arguments, ReCodEx will keep them with your default values.
 
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 
 def main(args: argparse.Namespace) -> Dict[str, float]:
     # Set the random seed and the number of threads.
@@ -52,8 +56,10 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
 
     model = tf.keras.Sequential()
     model.add(tf.keras.layers.Flatten(input_shape=[MNIST.H, MNIST.W, MNIST.C]))
+    model.add(tf.keras.layers.Dropout(args.dropout))
     for hidden_layer in args.hidden_layers:
         model.add(tf.keras.layers.Dense(hidden_layer, activation=tf.nn.relu))
+        model.add(tf.keras.layers.Dropout(args.dropout))
     model.add(tf.keras.layers.Dense(MNIST.LABELS, activation=tf.nn.softmax))
 
     # TODO: Implement label smoothing with the given `args.label_smoothing` strength.
@@ -64,24 +70,30 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     # of the gold class to a full categorical distribution (you can use either NumPy,
     # or there is a helper method also in the `tf.keras.utils` module).
 
+    smooth_labels = tf.keras.utils.to_categorical(mnist.train.data["labels"], MNIST.LABELS) * (
+            1 - args.label_smoothing) + args.label_smoothing/MNIST.LABELS * tf.ones([MNIST.LABELS])
+    dev_labels = tf.keras.utils.to_categorical(mnist.dev.data["labels"], MNIST.LABELS) * (
+            1 - args.label_smoothing) + args.label_smoothing / MNIST.LABELS * tf.ones([MNIST.LABELS])
+
     # TODO: Create a `tf.optimizers.experimental.AdamW`, using the default learning
     # rate and a weight decay of strength `args.weight_decay`. Then call the
     # `exclude_from_weight_decay` method to specify that all variables with "bias"
     # in their name should not be decayed.
-    optimizer = ...
+    optimizer = tf.keras.optimizers.experimental.AdamW(weight_decay=args.weight_decay)
+    optimizer.exclude_from_weight_decay(var_names=["bias"])
 
     model.compile(
         optimizer=optimizer,
-        loss=tf.losses.SparseCategoricalCrossentropy(),
-        metrics=[tf.metrics.SparseCategoricalAccuracy(name="accuracy")],
+        loss=tf.losses.CategoricalCrossentropy(),
+        metrics=[tf.metrics.CategoricalAccuracy(name="accuracy")],
     )
 
     tb_callback = tf.keras.callbacks.TensorBoard(args.logdir, histogram_freq=1)
 
     logs = model.fit(
-        mnist.train.data["images"], mnist.train.data["labels"],
+        mnist.train.data["images"], smooth_labels,
         batch_size=args.batch_size, epochs=args.epochs,
-        validation_data=(mnist.dev.data["images"], mnist.dev.data["labels"]),
+        validation_data=(mnist.dev.data["images"], dev_labels),
         callbacks=[tb_callback],
     )
 
