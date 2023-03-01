@@ -89,6 +89,14 @@ def main(args: argparse.Namespace) -> Tuple[List[float], List[float]]:
 
         _, ensemble_accuracy = ens.evaluate(mnist.dev.data["images"], mnist.dev.data["labels"])
 
+        '''out = tf.zeros([mnist.dev.data["images"].shape[0], MNIST.LABELS])
+        for i in range(model+1):
+            out += models[i].predict(mnist.dev.data["images"], verbose=0)
+        out /= model+1
+        ensemble_accuracy = tf.keras.metrics.SparseCategoricalAccuracy()
+        ensemble_accuracy.update_state(mnist.dev.data["labels"], out)
+        ensemble_accuracy = ensemble_accuracy.result().numpy()'''
+
 
         # Store the accuracies
         individual_accuracies.append(individual_accuracy)
