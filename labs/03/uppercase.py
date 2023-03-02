@@ -14,13 +14,15 @@ from uppercase_data import UppercaseData
 # `alphabet_size`, `batch_size`, `epochs`, and `windows`.
 # Also, you can set the number of the threads 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
-parser.add_argument("--alphabet_size", default=None, type=int, help="If given, use this many most frequent chars.")
-parser.add_argument("--batch_size", default=None, type=int, help="Batch size.")
+parser.add_argument("--alphabet_size", default=100, type=int, help="If given, use this many most frequent chars.")
+parser.add_argument("--batch_size", default=128, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=None, type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
-parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
-parser.add_argument("--window", default=None, type=int, help="Window size to use.")
+parser.add_argument("--threads", default=8, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--window", default=10, type=int, help="Window size to use.")
+
+load_epoch = 1
 
 # Team members:
 # 4c2c10df-00be-4008-8e01-1526b9225726
@@ -45,6 +47,7 @@ def main(args: argparse.Namespace) -> None:
 
     # Load data
     uppercase_data = UppercaseData(args.window, args.alphabet_size)
+    print(uppercase_data)
 
     # TODO: Implement a suitable model, optionally including regularization, select
     # good hyperparameters and train the model.
@@ -68,16 +71,54 @@ def main(args: argparse.Namespace) -> None:
     #   You can then flatten the one-hot encoded windows and follow with a dense layer.
     # - Alternatively, you can use `tf.keras.layers.Embedding` (which is an efficient
     #   implementation of one-hot encoding followed by a Dense layer) and flatten afterwards.
-    model = ...
+
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.Input(shape=[2 * args.window + 1], dtype=tf.int32))
+    model.add(tf.keras.layers.Lambda(lambda x: tf.one_hot(x, len(uppercase_data.train.alphabet))))
+    #model.add(tf.keras.layers.Embedding(args.alphabet_size, 64))
+    model.add(tf.keras.layers.Flatten())
+    model.add(tf.keras.layers.Dense(256, activation='relu'))
+    model.add(tf.keras.layers.Dense(2, activation=tf.nn.softmax))
+    model.summary()
+
+    model.compile(
+        optimizer=tf.optimizers.experimental.AdamW(),
+        loss=tf.losses.SparseCategoricalCrossentropy(),
+        metrics=[tf.metrics.SparseCategoricalAccuracy("accuracy")],
+    )
+    tb_callback = tf.keras.callbacks.TensorBoard(args.logdir, histogram_freq=1)
+
+    def save_model(epoch, logs):
+        model.save_weights(f'./checkpoints/epoch{epoch+1}.h5')
+
+    if load_epoch is None:
+        model.fit(uppercase_data.train.data['windows'], uppercase_data.train.data['labels'],
+                  batch_size=args.batch_size, epochs=args.epochs,
+                  validation_data=(uppercase_data.dev.data['windows'], uppercase_data.dev.data['labels']),
+                  callbacks=[tf.keras.callbacks.LambdaCallback(on_epoch_end=save_model), tb_callback]
+                  )
+    else:
+        model.load_weights(f"./checkpoints/epoch{load_epoch}.h5")
+
 
     # TODO: Generate correctly capitalized test set.
     # Use `uppercase_data.test.text` as input, capitalize suitable characters,
     # and write the result to predictions_file (which is
     # `uppercase_test.txt` in the `args.logdir` directory).
+
+    def selective_upper(index, char, labels):
+        if labels[index] > 0:
+            char = char.upper()
+        return char
+
     os.makedirs(args.logdir, exist_ok=True)
     with open(os.path.join(args.logdir, "uppercase_test.txt"), "w", encoding="utf-8") as predictions_file:
-        ...
-
+        ch_list = [*uppercase_data.test.text]
+        labels = model.predict(uppercase_data.test.data['windows'])
+        labels = tf.math.argmax(labels, axis=1)
+        u_list = [selective_upper(index, char, labels) for index, char in enumerate(ch_list)]
+        u_text = "".join(u_list)
+        predictions_file.write(u_text)
 
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
