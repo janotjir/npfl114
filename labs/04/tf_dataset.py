@@ -19,7 +19,7 @@ parser.add_argument("--debug", default=False, action="store_true", help="If give
 parser.add_argument("--epochs", default=5, type=int, help="Number of epochs.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Evaluation in ReCodEx.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
-parser.add_argument("--show_images", default=True, action="store_true", help="Show augmented images.")
+parser.add_argument("--show_images", default=False, action="store_true", help="Show augmented images.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
 
@@ -107,7 +107,7 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     # - Call `.map(image_to_float)` to convert images from tf.uint8 to tf.float32.
     #   Note that you want to do it after shuffling to minimize the buffer size.
     # - If `args.augment` is set, perform dataset augmentation via a call to either
-    #   - `.map(train_augment_tf_layers)`, if `args.augment == "tf_image"`, or
+    #   - `.map(train_augment_tf_image)`, if `args.augment == "tf_image"`, or
     #   - `.map(train_augment_layers)`, if `args.augment == "layers"`.
     # - Finally, call `.batch(args.batch_size)` to generate batches.
     # - Optionally, you might want to add `.prefetch(tf.data.AUTOTUNE)` as
@@ -119,7 +119,7 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     if args.show_images:
         summary_writer = tf.summary.create_file_writer(os.path.join(args.logdir, "images"))
         with summary_writer.as_default(step=0):
-            for images, _ in train.unbatch().batch(100).take(1):
+            for images, _ in train.rebatch(100).take(1):
                 images = tf.transpose(tf.reshape(images, [10, 10 * images.shape[1]] + images.shape[2:]), [0, 2, 1, 3])
                 images = tf.transpose(tf.reshape(images, [1, 10 * images.shape[1]] + images.shape[2:]), [0, 2, 1, 3])
                 tf.summary.image("train/batch", images)
