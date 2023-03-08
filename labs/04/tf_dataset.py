@@ -70,8 +70,8 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     # of `from_tensor_slices` -- in our case we want each example to
     # be a pair of `(input_image, target_label)`, so we need to pass
     # a pair `(data["images"], data["labels"])` to `from_tensor_slices`.
-    train = ...
-    dev = ...
+    train = tf.data.Dataset.from_tensor_slices((cifar.train.data["images"], cifar.train.data["labels"]))
+    dev = tf.data.Dataset.from_tensor_slices((cifar.dev.data["images"], cifar.dev.data["labels"]))
 
     # Convert images from tf.uint8 to tf.float32 and scale them to [0, 1] in the process.
     def image_to_float(image: tf.Tensor, label: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
@@ -114,7 +114,17 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     #   the last call -- it allows the pipeline to run in parallel with
     #   the training process, dynamically adjusting the buffer size of the
     #   prefetched elements.
-    train = ...
+    train = train.take(5000)
+    train = train.shuffle(5000, seed=args.seed)
+    train = train.map(image_to_float)
+
+    if args.augment == "tf_image":
+        train = train.map(train_augment_tf_image)
+    elif args.augment == "layers":
+        train = train.map(train_augment_layers)
+
+    train = train.batch(args.batch_size)
+    train = train.prefetch(tf.data.AUTOTUNE)
 
     if args.show_images:
         summary_writer = tf.summary.create_file_writer(os.path.join(args.logdir, "images"))
@@ -129,7 +139,9 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     # - Call `.map(image_to_float)` to convert images from tf.uint8 to tf.float32.
     # - Use `.batch(args.batch_size)` to generate batches.
     # - Optionally, add the `prefetch` call.
-    dev = ...
+    dev = dev.map(image_to_float)
+    dev = dev.batch(args.batch_size)
+    dev = dev.prefetch(tf.data.AUTOTUNE)
 
     # Train
     logs = model.fit(train, epochs=args.epochs, validation_data=dev, callbacks=[tb_callback])
