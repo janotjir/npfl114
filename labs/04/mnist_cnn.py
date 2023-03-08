@@ -49,7 +49,70 @@ class Model(tf.keras.Model):
         # You can assume the resulting network is valid; it is fine to crash if it is not.
         #
         # Produce the results in the variable `hidden`.
-        hidden = ...
+
+        hidden = inputs
+        residual = None
+        residual_active = False
+
+        layer_params = args.cnn.split(',')
+        for layer_param in layer_params:
+            layer_param = layer_param.split('-')
+            if layer_param[0] == 'C':
+                residual_terminal = False
+                if residual_active and "]" in layer_param[-1]:
+                    layer_param[-1] = layer_param[-1][:-1]
+                    residual_terminal = True
+                hidden = tf.keras.layers.Conv2D(int(layer_param[1]), int(layer_param[2]), strides=(int(layer_param[3]), int(layer_param[3])), 
+                padding=layer_param[4], activation='relu')(hidden)
+                if residual_terminal:
+                    hidden = hidden + residual
+                    residual = None
+                    residual_active = False
+            
+            elif layer_param[0] == 'CB':
+                residual_terminal = False
+                if residual_active and "]" in layer_param[-1]:
+                    layer_param[-1] = layer_param[-1][:-1]
+                    residual_terminal = True
+                hidden = tf.keras.layers.Conv2D(int(layer_param[1]), int(layer_param[2]), strides=(int(layer_param[3]), int(layer_param[3])), 
+                padding=layer_param[4], activation=None, use_bias=False)(hidden)
+                hidden = tf.keras.layers.BatchNormalization()(hidden)
+                hidden = tf.keras.layers.Activation('relu')(hidden)
+                if residual_terminal:
+                    hidden = hidden + residual
+                    residual = None
+                    residual_active = False
+            
+            elif layer_param[0] == 'M':
+                hidden = tf.keras.layers.MaxPool2D(pool_size=(int(layer_param[1]), int(layer_param[1])), strides=(int(layer_param[2]), int(layer_param[2])))(hidden)
+            
+            elif layer_param[0] == 'R':
+                residual = tf.identity(hidden)
+                layer_param[1] = layer_param[1][1:]
+                if "]" not in layer_param[-1]:
+                    residual_active = True
+                else:
+                    layer_param[-1] = layer_param[-1][:-1]
+                if layer_param[1] == 'C':
+                    hidden = tf.keras.layers.Conv2D(int(layer_param[2]), int(layer_param[3]), strides=(int(layer_param[4]), int(layer_param[4])), 
+                    padding=layer_param[5], activation='relu')(hidden)
+                elif layer_param[1] == 'CB':
+                    hidden = tf.keras.layers.Conv2D(int(layer_param[2]), int(layer_param[3]), strides=(int(layer_param[4]), int(layer_param[4])), 
+                    padding=layer_param[5], activation=None, use_bias=False)(hidden)
+                    hidden = tf.keras.layers.BatchNormalization()(hidden)
+                    hidden = tf.keras.layers.Activation('relu')(hidden)
+                if not residual_active:
+                    hidden = hidden + residual
+                    residual = None
+            
+            elif layer_param[0] == 'F':
+                hidden = tf.keras.layers.Flatten()(hidden)
+            
+            elif layer_param[0] == 'H':
+                hidden = tf.keras.layers.Dense(int(layer_param[1]), activation='relu')(hidden)
+            
+            elif layer_param[0] == 'D':
+                hidden = tf.keras.layers.Dropout(float(layer_param[1]))(hidden)
 
         # Add the final output layer
         outputs = tf.keras.layers.Dense(MNIST.LABELS, activation=tf.nn.softmax)(hidden)
