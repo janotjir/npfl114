@@ -72,6 +72,7 @@ class Model(tf.keras.Model):
         # the accuracy of both the direct and indirect comparisons should be
         # computed; name both metrics "accuracy" (i.e., pass "accuracy" as the
         # first argument of the metric object).
+
         self.compile(
             optimizer=tf.keras.optimizers.Adam(jit_compile=False),
             loss={
@@ -94,8 +95,11 @@ class Model(tf.keras.Model):
         dataset = tf.data.Dataset.from_tensor_slices((mnist_dataset.data["images"], mnist_dataset.data["labels"]))
 
         # TODO: If `training`, shuffle the data with `buffer_size=10000` and `seed=args.seed`.
+        if training:
+            dataset = dataset.shuffle(10000, seed=args.seed)
 
         # TODO: Combine pairs of examples by creating batches of size exactly 2.
+        dataset = dataset.batch(2)
 
         # TODO: Map pairs of images to elements suitable for our model. Notably,
         # the elements should be pairs `(input, output)`, with
@@ -103,10 +107,19 @@ class Model(tf.keras.Model):
         # - `output` being a dictionary with keys "digit_1", "digit_2", "direct_comparison",
         #   and "indirect_comparison".
         def create_element(images, labels):
-            ...
+            inputs = images
+            outputs = {
+                "direct_comparison": int(labels[0] > labels[1]),
+                "digit_1": labels[0],
+                "digit_2": labels[1],
+                "indirect_comparison": int(labels[0] > labels[1]),
+            }
+            return inputs, outputs
+
         dataset = dataset.map(create_element)
 
         # TODO: Create batches of size `args.batch_size`
+        dataset = dataset.batch(args.batch_size)
 
         return dataset
 
@@ -135,6 +148,10 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
 
     # Construct suitable datasets from the MNIST data.
     train = model.create_dataset(mnist.train, args, training=True)
+    print(train)
+    for batch in train.as_numpy_iterator():
+        print(batch)
+        break
     dev = model.create_dataset(mnist.dev, args)
 
     # Train
