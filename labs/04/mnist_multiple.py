@@ -37,6 +37,25 @@ class Model(tf.keras.Model):
         # - flattening layer,
         # - fully connected layer with 200 neurons and ReLU activation,
         # obtaining a 200-dimensional feature vector FV of each image.
+        model = tf.keras.Sequential()
+        model.add(tf.keras.layers.Input([MNIST.H, MNIST.W, MNIST.C]))
+        model.add(tf.keras.layers.Conv2D(10, 3, strides=(2,2), activation='relu'))
+        model.add(tf.keras.layers.Conv2D(20, 3, strides=(2,2), activation='relu'))
+        model.add(tf.keras.layers.Flatten())
+        model.add(tf.keras.layers.Dense(200, activation='relu'))
+
+        output1 = model(images[0])
+        output2 = model(images[1])
+        
+        output_direct = tf.keras.layers.Concatenate(axis=1)([output1, output2])
+        output_direct = tf.keras.layers.Dense(200, activation='relu')(output_direct)
+        output_direct = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)(output_direct)
+
+        layer_digit = tf.keras.layers.Dense(10, activation=tf.nn.softmax)
+
+        output1 = layer_digit(output1)
+        output2 = layer_digit(output2)
+        
 
         # TODO: Using the computed representations, the model should produce four outputs:
         # - first, compute _direct comparison_ whether the first digit is
@@ -52,10 +71,10 @@ class Model(tf.keras.Model):
         #   is greater than second, by comparing the predictions from the above
         #   two outputs.
         outputs = {
-            "direct_comparison": ...,
-            "digit_1": ...,
-            "digit_2": ...,
-            "indirect_comparison": ...,
+            "direct_comparison": output_direct,
+            "digit_1": output1,
+            "digit_2": output2,
+            "indirect_comparison": tf.cast(tf.math.argmax(output1, axis=1) > tf.math.argmax(output2, axis=1), dtype=tf.int32),
         }
 
         # Finally, construct the model.
@@ -76,21 +95,19 @@ class Model(tf.keras.Model):
         self.compile(
             optimizer=tf.keras.optimizers.Adam(jit_compile=False),
             loss={
-                "direct_comparison": ...,
-                "digit_1": ...,
-                "digit_2": ...,
+                "direct_comparison": tf.keras.losses.BinaryCrossentropy(),
+                "digit_1": tf.keras.losses.SparseCategoricalCrossentropy(),
+                "digit_2": tf.keras.losses.SparseCategoricalCrossentropy(),
             },
             metrics={
-                "direct_comparison": [...],
-                "indirect_comparison": [...],
+                "direct_comparison": [tf.metrics.BinaryAccuracy("accuracy")],
+                "indirect_comparison": [tf.metrics.BinaryAccuracy("accuracy")],
             },
         )
         self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
 
     # Create an appropriate dataset using the MNIST data.
-    def create_dataset(
-        self, mnist_dataset: MNIST.Dataset, args: argparse.Namespace, training: bool = False
-    ) -> tf.data.Dataset:
+    def create_dataset(self, mnist_dataset: MNIST.Dataset, args: argparse.Namespace, training: bool = False) -> tf.data.Dataset:
         # Start by using the original MNIST data
         dataset = tf.data.Dataset.from_tensor_slices((mnist_dataset.data["images"], mnist_dataset.data["labels"]))
 
@@ -107,11 +124,11 @@ class Model(tf.keras.Model):
         # - `output` being a dictionary with keys "digit_1", "digit_2", "direct_comparison",
         #   and "indirect_comparison".
         def create_element(images, labels):
-            inputs = images
+            inputs = (images[0], images[1])
             outputs = {
                 "direct_comparison": int(labels[0] > labels[1]),
-                "digit_1": labels[0],
-                "digit_2": labels[1],
+                "digit_1": int(labels[0]),
+                "digit_2": int(labels[1]),
                 "indirect_comparison": int(labels[0] > labels[1]),
             }
             return inputs, outputs
@@ -148,10 +165,6 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
 
     # Construct suitable datasets from the MNIST data.
     train = model.create_dataset(mnist.train, args, training=True)
-    print(train)
-    for batch in train.as_numpy_iterator():
-        print(batch)
-        break
     dev = model.create_dataset(mnist.dev, args)
 
     # Train
