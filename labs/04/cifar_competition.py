@@ -14,9 +14,9 @@ from cifar10 import CIFAR10
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
 parser.add_argument("--augment", default=False, action="store_true", help="Augmentation")
-parser.add_argument("--batch_size", default=128, type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=5, type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=12, type=int, help="Maximum number of threads to use.")
 
@@ -73,17 +73,33 @@ def main(args: argparse.Namespace) -> None:
     train = train.batch(args.batch_size)
     train = train.prefetch(tf.data.AUTOTUNE)
 
+    tst = tf.data.Dataset.from_tensor_slices((cifar.test.data["images"]))
+    tst = tst.map(lambda x: tf.image.convert_image_dtype(x, tf.float32))
+    tst = tst.batch(args.batch_size)
+
     # TODO: Create the model and train it
     # Create the model
     inputs = tf.keras.layers.Input(shape=[CIFAR10.H, CIFAR10.W, CIFAR10.C])
-    hidden = tf.keras.layers.Conv2D(16, 3, 2, "same", activation=tf.nn.relu)(inputs)
-    hidden = tf.keras.layers.Conv2D(16, 3, 1, "same", activation=tf.nn.relu)(hidden)
-    hidden = tf.keras.layers.Conv2D(24, 3, 2, "same", activation=tf.nn.relu)(hidden)
-    hidden = tf.keras.layers.Conv2D(24, 3, 1, "same", activation=tf.nn.relu)(hidden)
-    hidden = tf.keras.layers.Conv2D(32, 3, 2, "same", activation=tf.nn.relu)(hidden)
-    hidden = tf.keras.layers.Conv2D(32, 3, 1, "same", activation=tf.nn.relu)(hidden)
+    hidden = tf.keras.layers.Conv2D(32, 3, 1, "same", activation=None)(inputs)
+    hidden = tf.keras.layers.BatchNormalization()(hidden)
+    hidden = tf.keras.activations.relu(hidden)
+    hidden = tf.keras.layers.Conv2D(32, 3, 2, "same", activation=None)(hidden)
+    hidden = tf.keras.layers.BatchNormalization()(hidden)
+    hidden = tf.keras.activations.relu(hidden)
+    hidden = tf.keras.layers.Conv2D(64, 3, 1, "same", activation=None)(hidden)
+    hidden = tf.keras.layers.BatchNormalization()(hidden)
+    hidden = tf.keras.activations.relu(hidden)
+    hidden = tf.keras.layers.Conv2D(64, 3, 2, "same", activation=None)(hidden)
+    hidden = tf.keras.layers.BatchNormalization()(hidden)
+    hidden = tf.keras.activations.relu(hidden)
+    hidden = tf.keras.layers.Conv2D(128, 3, 1, "same", activation=None)(hidden)
+    hidden = tf.keras.layers.BatchNormalization()(hidden)
+    hidden = tf.keras.activations.relu(hidden)
+    hidden = tf.keras.layers.Conv2D(128, 3, 2, "same", activation=None)(hidden)
+    hidden = tf.keras.layers.BatchNormalization()(hidden)
+    hidden = tf.keras.activations.relu(hidden)
     hidden = tf.keras.layers.Flatten()(hidden)
-    hidden = tf.keras.layers.Dense(200, activation=tf.nn.relu)(hidden)
+    hidden = tf.keras.layers.Dense(32, activation=tf.nn.relu)(hidden)
     outputs = tf.keras.layers.Dense(len(CIFAR10.LABELS), activation=tf.nn.softmax)(hidden)
 
     # Compile the model
@@ -100,7 +116,7 @@ def main(args: argparse.Namespace) -> None:
     # Generate test set annotations, but in `args.logdir` to allow parallel execution.
     os.makedirs(args.logdir, exist_ok=True)
     with open(os.path.join(args.logdir, "cifar_competition_test.txt"), "w", encoding="utf-8") as predictions_file:
-        for probs in model.predict(cifar.test.data["images"], batch_size=args.batch_size):
+        for probs in model.predict(tst):
             print(np.argmax(probs), file=predictions_file)
 
 
