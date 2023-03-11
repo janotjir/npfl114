@@ -25,6 +25,9 @@ parser.add_argument("--model", default='xresnet18', type=str, choices=['xresnet1
 parser.add_argument("--test", default=False, action="store_true", help="Run model on test dataset")
 parser.add_argument("--model_path", default="", type=str, help="Specify model to trained model")
 
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
 
 class ResNet50(tf.keras.Model):
     def __init__(self):
