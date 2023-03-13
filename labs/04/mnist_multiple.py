@@ -119,7 +119,8 @@ class Model(tf.keras.Model):
         if training:
             dataset = dataset.shuffle(10000, seed=args.seed)
 
-        # TODO: Combine pairs of examples by creating batches of size exactly 2.
+        # TODO: Combine pairs of examples by creating batches of size exactly 2 (you would throw
+        # away the last example if the original dataset size were odd; but in MNIST it is even).
         dataset = dataset.batch(2)
 
         # TODO: Map pairs of images to elements suitable for our model. Notably,
