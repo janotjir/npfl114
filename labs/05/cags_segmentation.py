@@ -19,6 +19,11 @@ parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 
 
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
+
 def main(args: argparse.Namespace) -> None:
     # Fix random seeds and threads
     tf.keras.utils.set_random_seed(args.seed)

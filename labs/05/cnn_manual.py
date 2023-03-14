@@ -23,6 +23,11 @@ parser.add_argument("--verify", default=False, action="store_true", help="Verify
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
+
 class Convolution:
     def __init__(self, filters: int, kernel_size: int, stride: int, input_shape: List[int], verify: bool) -> None:
         # Create a convolutional layer with the given arguments
