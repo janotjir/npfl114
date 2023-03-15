@@ -41,6 +41,7 @@ class Convolution:
         self._kernel = tf.Variable(tf.initializers.GlorotUniform(seed=42)(
             [kernel_size, kernel_size, input_shape[2], filters]))
         self._bias = tf.Variable(tf.initializers.Zeros()([filters]))
+        #self._bias = tf.Variable(tf.experimental.numpy.arange(0, filters, dtype=tf.float32))
 
     def forward(self, inputs: tf.Tensor) -> tf.Tensor:
         # TODO: Compute the forward propagation through the convolution
@@ -50,7 +51,8 @@ class Convolution:
         # manually iterate through the individual pixels, batch examples,
         # input filters, or output filters. However, you can manually
         # iterate through the kernel size.
-        output = ...
+        output = self._conv2d(inputs)
+        output = tf.nn.relu(output)
 
         # If requested, verify that `output` contains a correct value.
         if self._verify:
@@ -58,6 +60,20 @@ class Convolution:
             np.testing.assert_allclose(output, reference, atol=1e-4, err_msg="Forward pass differs!")
 
         return output
+
+    def _conv2d(self, inputs: tf.Tensor) -> tf.Tensor:
+        patches = tf.image.extract_patches(images=inputs, sizes=[1, self._kernel_size, self._kernel_size, 1], strides=[1, self._stride, self._stride, 1], rates=[1, 1, 1, 1], padding='VALID')
+        _, h, w, _ = patches.shape
+        patches = tf.reshape(patches, (patches.shape[0], patches.shape[1]*patches.shape[2], patches.shape[3]))
+
+        kernel = tf.reshape(self._kernel, (-1, self._filters))
+        kernel = tf.expand_dims(kernel, axis=0)
+
+
+        out = tf.matmul(patches, kernel) + self._bias
+        out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
+
+        return out
 
     def backward(
         self, inputs: tf.Tensor, outputs: tf.Tensor, outputs_gradient: tf.Tensor
