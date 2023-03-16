@@ -69,9 +69,80 @@ class Convolution:
         kernel = tf.reshape(self._kernel, (-1, self._filters))
         kernel = tf.expand_dims(kernel, axis=0)
 
-
         out = tf.matmul(patches, kernel) + self._bias
         out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
+
+        return out
+
+    def _get_inputs_gradient(self, outputs_gradient):
+        b, hw, ww, f = outputs_gradient.shape
+        print(outputs_gradient.shape)
+        prepared_inputs = np.zeros((b, hw+(hw-1)*(self._stride-1)+2*(self._kernel_size-1), ww+(ww-1)*(self._stride-1)+2*(self._kernel_size-1), f), dtype=np.float32)
+        prepared_inputs[:, self._kernel_size-1:-self._kernel_size+1:self._stride, self._kernel_size-1:-self._kernel_size+1:self._stride, :] = outputs_gradient
+        prepared_inputs = tf.convert_to_tensor(prepared_inputs)
+
+        patches = tf.image.extract_patches(images=prepared_inputs, sizes=[1, self._kernel_size, self._kernel_size, 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
+        _, h, w, _ = patches.shape
+        print(patches.shape)
+        patches = tf.reshape(patches, (patches.shape[0], patches.shape[1]*patches.shape[2], patches.shape[3]))
+
+        kernel = self._kernel.numpy()
+        kernel = tf.convert_to_tensor(np.transpose(np.transpose(kernel, (1, 0, 2, 3))[::-1], (1, 0, 2, 3))[::-1])
+        kernel = tf.transpose(kernel, perm=[0, 1, 3, 2])
+        kernel = tf.reshape(kernel, (-1, kernel.shape[-1]))
+        kernel = tf.expand_dims(kernel, axis=0)
+
+        '''kernel = tf.transpose(self._kernel, perm=[0, 1, 3, 2])
+        kernel = tf.reshape(self._kernel, (-1, kernel.shape[-1]))
+        kernel = tf.expand_dims(kernel, axis=0)'''
+
+        out = tf.matmul(patches, kernel)
+        out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
+        print(out.shape)
+
+        return out
+
+    def _get_kernel_gradient(self, inputs, outputs_gradient):
+        '''_, kh, kw, f = outputs_gradient.shape
+        print(kh, kw, self._stride)'''
+
+        
+        b, hw, ww, f = outputs_gradient.shape
+        kernel = np.zeros((b, hw*self._stride-1, ww*self._stride-1, f), dtype=np.float32)
+        kernel[:, ::self._stride, ::self._stride, :] = outputs_gradient
+        kernel = tf.convert_to_tensor(kernel)
+        _, kh, kw, f = kernel.shape
+
+        inputs = tf.transpose(inputs, perm=[3, 1, 2, 0])
+        patches = tf.image.extract_patches(images=inputs, sizes=[1, kh, kw, 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
+        _, h, w, _ = patches.shape
+        patches = tf.reshape(patches, (patches.shape[0], patches.shape[1]*patches.shape[2], patches.shape[3]))
+
+        kernel = tf.transpose(kernel, perm=[1, 2, 0, 3])
+        kernel = tf.reshape(kernel, (-1, f))
+        kernel = tf.expand_dims(kernel, axis=0)
+
+        out = tf.matmul(patches, kernel)
+        out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
+        out = tf.transpose(out, perm=[1, 2, 0, 3])
+
+
+        '''inputs = tf.transpose(inputs, perm=[3, 1, 2, 0])
+        patches = tf.image.extract_patches(images=inputs, sizes=[1, kh, kw, 1], strides=[1, self._stride, self._stride, 1], rates=[1, 1, 1, 1], padding='VALID')
+        _, h, w, _ = patches.shape
+        print(patches.shape)
+        patches = tf.reshape(patches, (patches.shape[0], patches.shape[1]*patches.shape[2], patches.shape[3]))
+
+        outputs_gradient = tf.transpose(outputs_gradient, perm=[1, 2, 0, 3])
+        outputs_gradient = tf.reshape(outputs_gradient, (-1, f))
+        outputs_gradient = tf.expand_dims(outputs_gradient, axis=0)
+
+
+        print(patches.shape, outputs_gradient.shape)
+
+        out = tf.matmul(patches, outputs_gradient)
+        out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
+        out = tf.transpose(out, perm=[1, 2, 0, 3])'''
 
         return out
 
@@ -84,7 +155,21 @@ class Convolution:
         # - the `inputs` layer,
         # - `self._kernel`,
         # - `self._bias`.
-        inputs_gradient, kernel_gradient, bias_gradient = ..., ..., ...
+
+        # apply derivative of relu
+        outputs_gradient = outputs_gradient.numpy()
+        outputs_gradient[outputs <= 0] = 0
+        outputs_gradient = tf.convert_to_tensor(outputs_gradient)
+
+        # derivative wrt bias
+        bias_gradient = tf.math.reduce_sum(tf.reshape(outputs_gradient, (-1, outputs_gradient.shape[-1])), axis=0)
+
+        # derivative wrt input (full convolution of outputs_gradient and kernel that is rotated about 180 degrees)
+        print(inputs.shape)
+        inputs_gradient = self._get_inputs_gradient(outputs_gradient)
+
+        # derivative wrt kernel (convolution of outputs_gradient and inputs)
+        kernel_gradient = self._get_kernel_gradient(inputs, outputs_gradient)
 
         # If requested, verify that the three computed gradients are correct.
         if self._verify:
