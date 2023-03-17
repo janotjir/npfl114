@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=50, type=int, help="Batch size.")
 parser.add_argument("--cnn", default="5-3-2,10-3-2", type=str, help="CNN architecture.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=5, type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Evaluation in ReCodEx.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
@@ -77,9 +77,9 @@ class Convolution:
 
     def _get_inputs_gradient(self, outputs_gradient):
         b, hw, ww, f = outputs_gradient.shape
-        print(self._kernel.shape)
-        print(self._stride)
-        print(outputs_gradient.shape)
+        #print(self._kernel.shape)
+        #print(self._stride)
+        #print(outputs_gradient.shape)
         prepared_inputs = np.zeros((b, hw+(hw-1)*(self._stride-1)+2*(self._kernel_size-1), ww+(ww-1)*(self._stride-1)+2*(self._kernel_size-1), f), dtype=np.float32)
         prepared_inputs[:, self._kernel_size-1:-self._kernel_size+1:self._stride, self._kernel_size-1:-self._kernel_size+1:self._stride, :] = outputs_gradient
         pad_right = self._inshape[2] - prepared_inputs.shape[2] + self._kernel_size - 1
@@ -89,7 +89,7 @@ class Convolution:
 
         patches = tf.image.extract_patches(images=prepared_inputs, sizes=[1, self._kernel_size, self._kernel_size, 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
         _, h, w, _ = patches.shape
-        print(patches.shape)
+        #print(patches.shape)
         patches = tf.reshape(patches, (patches.shape[0], patches.shape[1]*patches.shape[2], patches.shape[3]))
 
         kernel = self._kernel.numpy()
@@ -104,7 +104,7 @@ class Convolution:
 
         out = tf.matmul(patches, kernel)
         out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
-        print(out.shape)
+        #print(out.shape)
 
         return out
 
@@ -112,7 +112,7 @@ class Convolution:
         '''_, kh, kw, f = outputs_gradient.shape
         print(kh, kw, self._stride)'''
 
-        
+        #print(inputs.shape, outputs_gradient.shape, self._stride, self._kernel.shape)
         b, hw, ww, f = outputs_gradient.shape
         kernel = np.zeros((b, hw*self._stride-1, ww*self._stride-1, f), dtype=np.float32)
         kernel[:, ::self._stride, ::self._stride, :] = outputs_gradient
@@ -131,6 +131,7 @@ class Convolution:
         out = tf.matmul(patches, kernel)
         out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
         out = tf.transpose(out, perm=[1, 2, 0, 3])
+        out = out[:self._kernel_size, :self._kernel_size, : , :]
 
 
         '''inputs = tf.transpose(inputs, perm=[3, 1, 2, 0])
@@ -171,7 +172,7 @@ class Convolution:
         bias_gradient = tf.math.reduce_sum(tf.reshape(outputs_gradient, (-1, outputs_gradient.shape[-1])), axis=0)
 
         # derivative wrt input (full convolution of outputs_gradient and kernel that is rotated about 180 degrees)
-        print(inputs.shape)
+        #print(inputs.shape)
         inputs_gradient = self._get_inputs_gradient(outputs_gradient)
 
         # derivative wrt kernel (convolution of outputs_gradient and inputs)
