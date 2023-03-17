@@ -81,7 +81,10 @@ class Convolution:
         #print(self._stride)
         #print(outputs_gradient.shape)
         prepared_inputs = np.zeros((b, hw+(hw-1)*(self._stride-1)+2*(self._kernel_size-1), ww+(ww-1)*(self._stride-1)+2*(self._kernel_size-1), f), dtype=np.float32)
-        prepared_inputs[:, self._kernel_size-1:-self._kernel_size+1:self._stride, self._kernel_size-1:-self._kernel_size+1:self._stride, :] = outputs_gradient
+        if self._kernel_size > 1:
+            prepared_inputs[:, self._kernel_size-1:-self._kernel_size+1:self._stride, self._kernel_size-1:-self._kernel_size+1:self._stride, :] = outputs_gradient
+        else:
+            prepared_inputs[:, ::self._stride, ::self._stride, :] = outputs_gradient
         pad_right = self._inshape[2] - prepared_inputs.shape[2] + self._kernel_size - 1
         pad_bottom = self._inshape[1] - prepared_inputs.shape[1] + self._kernel_size - 1
         prepared_inputs = np.pad(prepared_inputs, ((0, 0), (0, pad_bottom), (0, pad_right), (0, 0)), mode='constant')
