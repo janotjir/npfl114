@@ -19,7 +19,7 @@ parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning 
 parser.add_argument("--recodex", default=False, action="store_true", help="Evaluation in ReCodEx.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
-parser.add_argument("--verify", default=False, action="store_true", help="Verify the implementation.")
+parser.add_argument("--verify", default=True, action="store_true", help="Verify the implementation.")
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
@@ -51,6 +51,7 @@ class Convolution:
         # manually iterate through the individual pixels, batch examples,
         # input filters, or output filters. However, you can manually
         # iterate through the kernel size.
+        self._inshape = inputs.shape
         output = self._conv2d(inputs)
         output = tf.nn.relu(output)
 
@@ -76,9 +77,14 @@ class Convolution:
 
     def _get_inputs_gradient(self, outputs_gradient):
         b, hw, ww, f = outputs_gradient.shape
+        print(self._kernel.shape)
+        print(self._stride)
         print(outputs_gradient.shape)
         prepared_inputs = np.zeros((b, hw+(hw-1)*(self._stride-1)+2*(self._kernel_size-1), ww+(ww-1)*(self._stride-1)+2*(self._kernel_size-1), f), dtype=np.float32)
         prepared_inputs[:, self._kernel_size-1:-self._kernel_size+1:self._stride, self._kernel_size-1:-self._kernel_size+1:self._stride, :] = outputs_gradient
+        pad_right = self._inshape[2] - prepared_inputs.shape[2] + self._kernel_size - 1
+        pad_bottom = self._inshape[1] - prepared_inputs.shape[1] + self._kernel_size - 1
+        prepared_inputs = np.pad(prepared_inputs, ((0, 0), (0, pad_bottom), (0, pad_right), (0, 0)), mode='constant')
         prepared_inputs = tf.convert_to_tensor(prepared_inputs)
 
         patches = tf.image.extract_patches(images=prepared_inputs, sizes=[1, self._kernel_size, self._kernel_size, 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
