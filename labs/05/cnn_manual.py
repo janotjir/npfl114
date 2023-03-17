@@ -101,10 +101,6 @@ class Convolution:
         kernel = tf.reshape(kernel, (-1, kernel.shape[-1]))
         kernel = tf.expand_dims(kernel, axis=0)
 
-        '''kernel = tf.transpose(self._kernel, perm=[0, 1, 3, 2])
-        kernel = tf.reshape(self._kernel, (-1, kernel.shape[-1]))
-        kernel = tf.expand_dims(kernel, axis=0)'''
-
         out = tf.matmul(patches, kernel)
         out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
         #print(out.shape)
@@ -112,12 +108,10 @@ class Convolution:
         return out
 
     def _get_kernel_gradient(self, inputs, outputs_gradient):
-        '''_, kh, kw, f = outputs_gradient.shape
-        print(kh, kw, self._stride)'''
-
         #print(inputs.shape, outputs_gradient.shape, self._stride, self._kernel.shape)
         b, hw, ww, f = outputs_gradient.shape
-        kernel = np.zeros((b, hw*self._stride-1, ww*self._stride-1, f), dtype=np.float32)
+        _, hi, wi, _ = inputs.shape
+        kernel = np.zeros((b, hi-(self._kernel_size-1), wi-(self._kernel_size-1), f),  dtype=np.float32)
         kernel[:, ::self._stride, ::self._stride, :] = outputs_gradient
         kernel = tf.convert_to_tensor(kernel)
         _, kh, kw, f = kernel.shape
@@ -135,24 +129,6 @@ class Convolution:
         out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
         out = tf.transpose(out, perm=[1, 2, 0, 3])
         out = out[:self._kernel_size, :self._kernel_size, : , :]
-
-
-        '''inputs = tf.transpose(inputs, perm=[3, 1, 2, 0])
-        patches = tf.image.extract_patches(images=inputs, sizes=[1, kh, kw, 1], strides=[1, self._stride, self._stride, 1], rates=[1, 1, 1, 1], padding='VALID')
-        _, h, w, _ = patches.shape
-        print(patches.shape)
-        patches = tf.reshape(patches, (patches.shape[0], patches.shape[1]*patches.shape[2], patches.shape[3]))
-
-        outputs_gradient = tf.transpose(outputs_gradient, perm=[1, 2, 0, 3])
-        outputs_gradient = tf.reshape(outputs_gradient, (-1, f))
-        outputs_gradient = tf.expand_dims(outputs_gradient, axis=0)
-
-
-        print(patches.shape, outputs_gradient.shape)
-
-        out = tf.matmul(patches, outputs_gradient)
-        out = tf.reshape(out, (out.shape[0], h, w, out.shape[-1]))
-        out = tf.transpose(out, perm=[1, 2, 0, 3])'''
 
         return out
 
