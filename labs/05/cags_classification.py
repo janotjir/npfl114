@@ -59,13 +59,13 @@ def main(args: argparse.Namespace) -> None:
         def train_augment_tf_image(image: tf.Tensor, label: tf.Tensor):
             if generator.uniform([]) >= 0.5:
                 image = tf.image.flip_left_right(image)
-            image = tf.image.resize_with_crop_or_pad(image, CIFAR10.H + 6, CIFAR10.W + 6)
-            image = tf.image.resize(image, [generator.uniform([], CIFAR10.H, CIFAR10.H + 12 + 1, dtype=tf.int32),
-                                            generator.uniform([], CIFAR10.W, CIFAR10.W + 12 + 1, dtype=tf.int32)])
+            image = tf.image.resize_with_crop_or_pad(image, CAGS.H + 6, CAGS.W + 6)
+            image = tf.image.resize(image, [generator.uniform([], CAGS.H, CAGS.H + 12 + 1, dtype=tf.int32),
+                                            generator.uniform([], CAGS.W, CAGS.W + 12 + 1, dtype=tf.int32)])
             image = tf.image.crop_to_bounding_box(
-                image, target_height=CIFAR10.H, target_width=CIFAR10.W,
-                offset_height=generator.uniform([], maxval=tf.shape(image)[0] - CIFAR10.H + 1, dtype=tf.int32),
-                offset_width=generator.uniform([], maxval=tf.shape(image)[1] - CIFAR10.W + 1, dtype=tf.int32),
+                image, target_height=CAGS.H, target_width=CAGS.W,
+                offset_height=generator.uniform([], maxval=tf.shape(image)[0] - CAGS.H + 1, dtype=tf.int32),
+                offset_width=generator.uniform([], maxval=tf.shape(image)[1] - CAGS.W + 1, dtype=tf.int32),
             )
             return image, label
 
