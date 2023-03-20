@@ -305,10 +305,12 @@ def main(args: argparse.Namespace) -> None:
         data = cags.dev.map(lambda x: x["image"])
         data = data.batch(args.batch_size)
         out_filename = 'cags_dev_segmentation.txt'
+        masks_filename = 'dev_masks'
     else:
         data = cags.test.map(lambda x: x["image"])
         data = data.batch(args.batch_size)
         out_filename = 'cags_segmentation.txt'
+        masks_filename = 'test_masks'
 
 
     # Generate test set annotations, but in `args.logdir` to allow parallel execution.
@@ -318,7 +320,7 @@ def main(args: argparse.Namespace) -> None:
         test_masks = model.predict(data)[:, :, :, -1]
         
         if args.save_masks:
-            np.save(os.path.join(args.logdir, "test_masks"), (test_masks >= 0.5).astype(np.uint8))
+            np.save(os.path.join(args.logdir, masks_filename), (test_masks >= 0.5).astype(np.uint8))
 
         if args.evaluate:
             iou = CAGS.evaluate_segmentation(cags.dev, test_masks)
