@@ -19,7 +19,9 @@ parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 parser.add_argument("--test", default=False, action="store_true", help="Run model on test dataset")
+parser.add_argument("--evaluate", default=False, action="store_true", help="Run model on dev dataset and print IoU")
 parser.add_argument("--model_path", default="", type=str, help="Specify path to trained model")
+parser.add_argument("--save_masks", default=False, action='store_true', help="Specify if the mask should be saved in .npy format")
 
 
 # Team members:
@@ -28,7 +30,7 @@ parser.add_argument("--model_path", default="", type=str, help="Specify path to 
 
 
 class EfficientUNetV2B0(tf.keras.Model):
-    def __init__(self):
+    def __init__(self, out_channels=1):
         inputs = tf.keras.layers.Input(shape=[CAGS.H, CAGS.W, CAGS.C])
 
         # Load the EfficientNetV2-B0 model
@@ -83,10 +85,142 @@ class EfficientUNetV2B0(tf.keras.Model):
         hidden = tf.keras.layers.BatchNormalization()(hidden)
         hidden = tf.keras.layers.Activation(tf.keras.activations.swish)(hidden)
 
-        hidden = tf.keras.layers.Conv2D(2, 1, use_bias=False, padding='same')(hidden)
-        hidden = tf.keras.layers.Activation(tf.nn.softmax)(hidden)
+        if out_channels == 2:
+            hidden = tf.keras.layers.Conv2D(2, 1, use_bias=False, padding='same')(hidden)
+            hidden = tf.keras.layers.Activation(tf.nn.softmax)(hidden)
+        else:
+            hidden = tf.keras.layers.Conv2D(1, 1, use_bias=False, padding='same')(hidden)
+            hidden = tf.keras.layers.Activation(tf.nn.sigmoid)(hidden)
 
         super().__init__(inputs=inputs, outputs=hidden)
+
+
+class UResEfficientNetV2B0(tf.keras.Model):
+    def __init__(self, out_channels=1):
+        inputs = tf.keras.layers.Input(shape=[CAGS.H, CAGS.W, CAGS.C])
+
+        # Load the EfficientNetV2-B0 model
+        backbone = tf.keras.applications.EfficientNetV2B0(include_top=False)
+        backbone = tf.keras.Model(
+            inputs=backbone.input,
+            outputs=[backbone.get_layer(layer).output for layer in [
+                "top_activation", "block5e_add", "block3b_add", "block2b_add", "stem_activation"]]
+        )
+        backbone.trainable = False
+
+        inputs = tf.keras.layers.Input(shape=[CAGS.H, CAGS.W, CAGS.C])
+        bb_out = backbone(inputs)
+       
+        hidden = tf.keras.layers.Conv2D(640, 3, use_bias=False, padding='same')(bb_out[0])
+        hidden = tf.keras.layers.BatchNormalization()(hidden)
+        hidden = tf.keras.layers.Activation(tf.keras.activations.swish)(hidden)
+
+        hidden = self._decoder_block(hidden, [320, 256, 256], bb_out[1])
+        hidden = self._decoder_block(hidden, [128, 128, 128], bb_out[2])
+        hidden = self._decoder_block(hidden, [64, 64, 64], bb_out[3])
+        hidden = self._decoder_block(hidden, [32, 32, 32], bb_out[4])
+
+        hidden = tf.keras.layers.Conv2DTranspose(16, 3, strides=2, use_bias=False, padding='same')(hidden)
+        hidden = tf.keras.layers.BatchNormalization()(hidden)
+        hidden = tf.keras.layers.Activation(tf.keras.activations.swish)(hidden)
+
+        if out_channels == 2:
+            hidden = tf.keras.layers.Conv2D(2, 1, use_bias=False, padding='same')(hidden)
+            hidden = tf.keras.layers.Activation(tf.nn.softmax)(hidden)
+        else:
+            hidden = tf.keras.layers.Conv2D(1, 1, use_bias=False, padding='same')(hidden)
+            hidden = tf.keras.layers.Activation(tf.nn.sigmoid)(hidden)
+
+        super().__init__(inputs=inputs, outputs=hidden)
+
+    def _decoder_block(self, input, filters, skip):
+        x = tf.keras.layers.Conv2DTranspose(filters[0], 3, strides=2, use_bias=False, padding='same')(input)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Concatenate(axis=-1)([x, skip])
+
+        x = self._res_block(x, filters[1:])
+
+        return x
+
+    def _res_block(self, input, filters):
+        x = tf.keras.layers.Conv2D(filters[0], kernel_size=3, strides=1, padding='same', activation=None, use_bias=False)(input)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Activation(tf.keras.activations.swish)(x)
+
+        x = tf.keras.layers.Conv2D(filters[1], kernel_size=3, strides=1, padding='same', activation=None, use_bias=False)(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+
+        input = tf.keras.layers.Conv2D(filters[1], kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
+        input = tf.keras.layers.BatchNormalization()(input)
+
+        x = tf.keras.layers.add([x, input])
+        x = tf.keras.layers.Activation(tf.keras.activations.swish)(x)
+        
+        return x
+
+
+class UResEfficientNetV2B0L(tf.keras.Model):
+    def __init__(self, out_channels=1):
+        inputs = tf.keras.layers.Input(shape=[CAGS.H, CAGS.W, CAGS.C])
+
+        # Load the EfficientNetV2-B0 model
+        backbone = tf.keras.applications.EfficientNetV2B0(include_top=False)
+        backbone = tf.keras.Model(
+            inputs=backbone.input,
+            outputs=[backbone.get_layer(layer).output for layer in [
+                "top_activation", "block5e_add", "block3b_add", "block2b_add", "stem_activation"]]
+        )
+        backbone.trainable = False
+
+        inputs = tf.keras.layers.Input(shape=[CAGS.H, CAGS.W, CAGS.C])
+        bb_out = backbone(inputs)
+       
+        hidden = tf.keras.layers.Conv2D(640, 3, use_bias=False, padding='same')(bb_out[0])
+        hidden = tf.keras.layers.BatchNormalization()(hidden)
+        hidden = tf.keras.layers.Activation(tf.keras.activations.swish)(hidden)
+
+        hidden = self._decoder_block(hidden, [512, 512, 256], bb_out[1])
+        hidden = self._decoder_block(hidden, [256, 256, 128], bb_out[2])
+        hidden = self._decoder_block(hidden, [128, 128, 64], bb_out[3])
+        hidden = self._decoder_block(hidden, [64, 64, 32], bb_out[4])
+
+        hidden = tf.keras.layers.Conv2DTranspose(16, 3, strides=2, use_bias=False, padding='same')(hidden)
+        hidden = tf.keras.layers.BatchNormalization()(hidden)
+        hidden = tf.keras.layers.Activation(tf.keras.activations.swish)(hidden)
+
+        if out_channels == 2:
+            hidden = tf.keras.layers.Conv2D(2, 1, use_bias=False, padding='same')(hidden)
+            hidden = tf.keras.layers.Activation(tf.nn.softmax)(hidden)
+        else:
+            hidden = tf.keras.layers.Conv2D(1, 1, use_bias=False, padding='same')(hidden)
+            hidden = tf.keras.layers.Activation(tf.nn.sigmoid)(hidden)
+
+        super().__init__(inputs=inputs, outputs=hidden)
+
+    def _decoder_block(self, input, filters, skip):
+        x = tf.keras.layers.Conv2DTranspose(filters[0], 3, strides=2, use_bias=False, padding='same')(input)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Concatenate(axis=-1)([x, skip])
+
+        x = self._res_block(x, filters[1:])
+
+        return x
+
+    def _res_block(self, input, filters):
+        x = tf.keras.layers.Conv2D(filters[0], kernel_size=3, strides=1, padding='same', activation=None, use_bias=False)(input)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Activation(tf.keras.activations.swish)(x)
+
+        x = tf.keras.layers.Conv2D(filters[1], kernel_size=3, strides=1, padding='same', activation=None, use_bias=False)(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+
+        input = tf.keras.layers.Conv2D(filters[1], kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
+        input = tf.keras.layers.BatchNormalization()(input)
+
+        x = tf.keras.layers.add([x, input])
+        x = tf.keras.layers.Activation(tf.keras.activations.swish)(x)
+        
+        return x
 
 
 def main(args: argparse.Namespace) -> None:
@@ -105,7 +239,7 @@ def main(args: argparse.Namespace) -> None:
     # Load the data
     cags = CAGS()
 
-    if not args.test:
+    if not args.test and not args.evaluate:
 
         generator = tf.random.Generator.from_seed(args.seed)
         def train_augment_tf_image(image: tf.Tensor, label: tf.Tensor):
@@ -133,16 +267,18 @@ def main(args: argparse.Namespace) -> None:
         dev = dev.prefetch(tf.data.AUTOTUNE)
 
         # TODO: Create the model and train it
-        model = EfficientUNetV2B0()
+        #model = EfficientUNetV2B0(out_channels=1)
+        model = UResEfficientNetV2B0(out_channels=1)
+        #model = UResEfficientNetV2B0L(out_channels=1)
 
         model.compile(
             optimizer=tf.optimizers.experimental.AdamW(jit_compile=False),
-            loss=tf.losses.SparseCategoricalCrossentropy(),
+            #loss=tf.losses.SparseCategoricalCrossentropy(),
             #loss=scce_with_labelsmooth,
             #loss=loss,
-            #loss=tf.losses.BinaryCrossentropy(),
-            metrics=[tf.metrics.SparseCategoricalAccuracy(name="accuracy")],
-            #metrics=[tf.metrics.BinaryAccuracy(name="accuracy"), tf.keras.metrics.BinaryIoU(name='iou')],
+            loss=tf.losses.BinaryCrossentropy(),
+            #metrics=[tf.metrics.SparseCategoricalAccuracy(name="accuracy")],
+            metrics=[tf.metrics.BinaryAccuracy(name="accuracy"), tf.keras.metrics.BinaryIoU(name='iou')],
         )
             
         tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
@@ -159,20 +295,34 @@ def main(args: argparse.Namespace) -> None:
             exit()
         args.logdir = "/".join(args.model_path.split("/")[:-1])
 
-        model = EfficientUNetV2B0()
+        # model = EfficientUNetV2B0(out_channels=1)
+        #model = UResEfficientNetV2B0(out_channels=1)
+        model = UResEfficientNetV2B0L(out_channels=1)
         model.load_weights(args.model_path)
 
 
-    tst = cags.test.map(lambda x: x["image"])
-    tst = tst.batch(args.batch_size)
+    if args.evaluate:
+        data = cags.dev.map(lambda x: x["image"])
+        data = data.batch(args.batch_size)
+        out_filename = 'cags_dev_segmentation.txt'
+    else:
+        data = cags.test.map(lambda x: x["image"])
+        data = data.batch(args.batch_size)
+        out_filename = 'cags_segmentation.txt'
+
 
     # Generate test set annotations, but in `args.logdir` to allow parallel execution.
     os.makedirs(args.logdir, exist_ok=True)
-    with open(os.path.join(args.logdir, "cags_segmentation.txt"), "w", encoding="utf-8") as predictions_file:
+    with open(os.path.join(args.logdir, out_filename), "w", encoding="utf-8") as predictions_file:
         # TODO: Predict the masks on the test set
-        # ACHTUNG: following procedure requires one-channel predictions !
-        test_masks = model.predict(tst)[:, :, :, 1]
-        print(test_masks.shape)
+        test_masks = model.predict(data)[:, :, :, -1]
+        
+        if args.save_masks:
+            np.save(os.path.join(args.logdir, "test_masks"), (test_masks >= 0.5).astype(np.uint8))
+
+        if args.evaluate:
+            iou = CAGS.evaluate_segmentation(cags.dev, test_masks)
+            tf.print(iou)
 
         for mask in test_masks:
             zeros, ones, runs = 0, 0, []
