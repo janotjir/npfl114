@@ -295,9 +295,9 @@ def main(args: argparse.Namespace) -> None:
             exit()
         args.logdir = "/".join(args.model_path.split("/")[:-1])
 
-        # model = EfficientUNetV2B0(out_channels=1)
+        model = EfficientUNetV2B0(out_channels=2)
         #model = UResEfficientNetV2B0(out_channels=1)
-        model = UResEfficientNetV2B0L(out_channels=1)
+        #model = UResEfficientNetV2B0L(out_channels=1)
         model.load_weights(args.model_path)
 
 
