@@ -2,6 +2,7 @@ import os
 import sys
 from typing import Dict, Iterator, Optional
 import urllib.request
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import numpy as np
 import tensorflow as tf
@@ -51,7 +52,8 @@ class MNIST:
         path = "{}.npz".format(dataset)
         if not os.path.exists(path):
             print("Downloading dataset {}...".format(dataset), file=sys.stderr)
-            urllib.request.urlretrieve("{}/{}".format(self._URL, path), filename=path)
+            urllib.request.urlretrieve("{}/{}".format(self._URL, path), filename="{}.tmp".format(path))
+            os.rename("{}.tmp".format(path), path)
 
         mnist = np.load(path)
         for dataset in ["train", "dev", "test"]:

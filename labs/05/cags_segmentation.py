@@ -236,7 +236,8 @@ def main(args: argparse.Namespace) -> None:
         ",".join(("{}={}".format(re.sub("(.)[^_]*_?", r"\1", k), v) for k, v in sorted(vars(args).items())))
     ))
 
-    # Load the data
+    # Load the data. Note that both the "image" and the "mask" images
+    # are represented using `tf.uint8`s in [0-255] range.
     cags = CAGS()
 
     if not args.test and not args.evaluate:
