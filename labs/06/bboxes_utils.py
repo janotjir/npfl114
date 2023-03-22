@@ -71,7 +71,18 @@ def bboxes_to_fast_rcnn(anchors: Tensor, bboxes: Tensor) -> Tensor:
     """
 
     # TODO: Implement according to the docstring.
-    raise NotImplementedError()
+    result = np.zeros(anchors.shape)
+    anchors_height = anchors[:, BOTTOM] - anchors[:, TOP]
+    bboxes_height = bboxes[:, BOTTOM] - bboxes[:, TOP]
+    anchors_width = anchors[:, RIGHT] - anchors[:, LEFT]
+    bboxes_width = bboxes[:, RIGHT] - bboxes[:, LEFT]
+    
+    result[:, TOP] = ((bboxes[:, TOP]+bboxes_height/2) - (anchors[:, TOP]+anchors_height/2)) / anchors_height
+    result[:, LEFT] = ((bboxes[:, LEFT]+bboxes_width/2) - (anchors[:, LEFT]+anchors_width/2)) / anchors_width
+    result[:, BOTTOM] = np.log(bboxes_height / anchors_height)
+    result[:, RIGHT] = np.log(bboxes_width / anchors_width)
+    
+    return result
 
 
 def bboxes_from_fast_rcnn(anchors: Tensor, fast_rcnns: Tensor) -> Tensor:
@@ -82,7 +93,20 @@ def bboxes_from_fast_rcnn(anchors: Tensor, fast_rcnns: Tensor) -> Tensor:
     """
 
     # TODO: Implement according to the docstring.
-    raise NotImplementedError()
+    result = np.zeros(anchors.shape)
+    
+    anchors_height = anchors[:, BOTTOM] - anchors[:, TOP]
+    anchors_width = anchors[:, RIGHT] - anchors[:, LEFT]
+    
+    bboxes_height = np.exp(fast_rcnns[:, BOTTOM]) * anchors_height
+    bboxes_width = np.exp(fast_rcnns[:, RIGHT]) * anchors_width
+
+    result[:, TOP] = fast_rcnns[:, TOP] * anchors_height + (anchors[:, TOP]+anchors_height/2) - bboxes_height/2
+    result[:, LEFT] = fast_rcnns[:, LEFT] * anchors_width + (anchors[:, LEFT]+anchors_width/2) - bboxes_width/2
+    result[:, BOTTOM] = result[:, TOP] + bboxes_height
+    result[:, RIGHT] = result[:, LEFT] + bboxes_width
+
+    return result
 
 
 def bboxes_training(
