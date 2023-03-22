@@ -140,14 +140,37 @@ def bboxes_training(
       is >= iou_threshold, assign the object to the anchor.
     """
 
+    anchor_classes = np.zeros(anchors.shape[0])
+    anchor_bboxes = np.zeros(anchors.shape)
+    ious = bboxes_iou(np.expand_dims(anchors, axis=1), np.expand_dims(gold_bboxes, axis=0))
+
     # TODO: First, for each gold object, assign it to an anchor with the
     # largest IoU (the one with smaller index if there are several). In case
     # several gold objects are assigned to a single anchor, use the gold object
     # with smaller index.
 
+    # find for each gold object anchor with the max iou
+    anchor_idxs = np.argmax(ious, axis=0)
+    # mask out objects assigned to a single anchor
+    _, mask = np.unique(anchor_idxs, return_index=True)
+    # update anchor_classes and anchor_bboxes
+    anchor_classes[anchor_idxs[mask]] = gold_classes[mask] + 1
+    anchor_bboxes[anchor_idxs[mask]] = bboxes_to_fast_rcnn(anchors[anchor_idxs[mask]], gold_bboxes[mask])
+
     # TODO: For each unused anchor, find the gold object with the largest IoU
     # (again the one with smaller index if there are several), and if the IoU
     # is >= threshold, assign the object to the anchor.
+
+    # find which anchors are unused
+    anchor_idxs = np.squeeze(np.nonzero(anchor_classes < 1))
+    # find for unused anchors gold objects with the max iou
+    idxs = np.argmax(ious[anchor_idxs, :], axis=1)
+    # mask out anchors whose max iou is not >= threshold
+    mask = ious[anchor_idxs, idxs] >= iou_threshold
+    # update anchor_classes and anchor_bboxes
+    anchor_classes[anchor_idxs[mask]] = gold_classes[idxs[mask]] + 1
+    anchor_bboxes[anchor_idxs[mask]] = bboxes_to_fast_rcnn(anchors[anchor_idxs[mask]], gold_bboxes[idxs[mask]])
+    
 
     return anchor_classes, anchor_bboxes
 
