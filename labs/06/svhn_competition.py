@@ -14,11 +14,47 @@ from svhn_dataset import SVHN
 # TODO: Define reasonable defaults and optionally more parameters.
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=..., type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--iou_thr", default=0.5, type=int, help="IoU threshold for gold classes.")
+
+
+pyramid_scales = [2, 4, 8, 16]
+anchor_shapes = np.array([[1,1], [1,2], [2,1]])
+input_shape = [300, 300]
+
+
+class KretinaNet(tf.keras.Model):
+    def __init__(self):
+        return
+    
+
+def prepare_examples(img, cls, bbx):
+    paddings = tf.constant([[0, input_shape[0] - img.shape[0]], [0, input_shape[1] - img.shape[1]], [0, 0]])
+    img = tf.pad(img, paddings, mode='constant')
+
+    anchors = np.array([], dtype=np.float32).reshape(0, 4)
+    for scale in pyramid_scales:
+        scaled_anchors = scale * anchor_shapes
+        for anchor in scaled_anchors:
+            x_positions = np.arange(img.shape[0] - anchor[0] + 1)
+            y_positions = np.arange(img.shape[1] - anchor[1] + 1)
+            xv, yv = np.meshgrid(x_positions, y_positions)
+            upper_left = np.concatenate([xv[..., np.newaxis], yv[..., np.newaxis]], 2).reshape(-1, 2)
+            lower_right = upper_left + anchor[np.newaxis, :]
+            anchor_coords = np.hstack([upper_left, lower_right])
+            #print(anchor_coords)
+            anchors = np.vstack([anchors, anchor_coords])
+    
+    #print(anchors)
+    anchor_cls, anchor_bbx = bboxes_utils.bboxes_training(anchors, cls.numpy(), bbx.numpy(), args.iou_thr)
+
+    return img, anchor_cls, anchor_bbx
+
+
 
 
 def main(args: argparse.Namespace) -> None:
@@ -39,6 +75,16 @@ def main(args: argparse.Namespace) -> None:
 
     # Load the data
     svhn = SVHN()
+
+    train = svhn.train
+    dev = svhn.dev
+    test = svhn.test
+    
+    train = train.map(lambda x: (x["image"], x["classes"], x['bboxes']))
+    train = train.map(lambda img, cls, bbx: tf.py_function(prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.int64, tf.float32]))
+   
+    for img, cls, bbx in train:
+        print(img.shape, cls.shape, bbx.shape)
 
     # Load the EfficientNetV2-B0 model. It assumes the input images are
     # represented in [0-255] range using either `tf.uint8` or `tf.float32` type.
