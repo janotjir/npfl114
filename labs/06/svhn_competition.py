@@ -29,7 +29,18 @@ input_shape = [300, 300]
 
 class KretinaNet(tf.keras.Model):
     def __init__(self):
-        return
+        inputs = tf.keras.layers.Input(shape=[input_shape[0], input_shape[1], 3])
+
+        backbone = tf.keras.applications.EfficientNetV2B0(include_top=False)
+        backbone = tf.keras.Model(
+            inputs=backbone.input,
+            outputs=[backbone.get_layer(layer).output for layer in [
+                "top_activation", "block5e_add", "block3b_add", "block2b_add", "block1a_project_activation"]]
+        )
+
+        bb_out = backbone(inputs)
+
+        # TODO: build the pyramid and detection heads
     
 
 def prepare_examples(img, cls, bbx):
@@ -86,6 +97,7 @@ def main(args: argparse.Namespace) -> None:
     for img, cls, bbx in train:
         print(img.shape, cls.shape, bbx.shape)
 
+    '''
     # Load the EfficientNetV2-B0 model. It assumes the input images are
     # represented in [0-255] range using either `tf.uint8` or `tf.float32` type.
     backbone = tf.keras.applications.EfficientNetV2B0(include_top=False)
@@ -98,6 +110,7 @@ def main(args: argparse.Namespace) -> None:
         outputs=[backbone.get_layer(layer).output for layer in [
              "top_activation", "block5e_add", "block3b_add", "block2b_add", "block1a_project_activation"]]
     )
+    '''
 
     # TODO: Create the model and train it
     model = ...
