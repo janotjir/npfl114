@@ -5,6 +5,12 @@ import unittest
 
 import numpy as np
 
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
+
 BACKEND = np  # or you can use `tf` for TensorFlow implementation
 
 # Bounding boxes and anchors are expected to be Numpy/TensorFlow tensors,

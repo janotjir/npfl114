@@ -22,25 +22,99 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--iou_thr", default=0.5, type=int, help="IoU threshold for gold classes.")
 
 
-pyramid_scales = [2, 4, 8, 16]
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
+
+pyramid_scales = [8, 16, 32]
 anchor_shapes = np.array([[1,1], [1,2], [2,1]])
-input_shape = [300, 300]
+input_shape = [320, 320]
+A = len(pyramid_scales) * anchor_shapes.shape[0]
 
 
+# TODO change anchor generating to match retinanet (5 pyramid scales)
 class KretinaNet(tf.keras.Model):
     def __init__(self):
         inputs = tf.keras.layers.Input(shape=[input_shape[0], input_shape[1], 3])
 
-        backbone = tf.keras.applications.EfficientNetV2B0(include_top=False)
+        c = self._backbone(inputs)
+        p = self._pyramid_network(c)
+        
+        cls_out = self._classification_head(p)
+        print(cls_out.shape)
+        box_out = self._regression_head(p)
+        print(box_out.shape)
+
+        super().__init__(inputs=inputs, outputs=[cls_out, box_out])
+
+    def _backbone(self, inputs):
+        backbone = tf.keras.applications.EfficientNetV2B0(include_top=False, weights="imagenet", input_shape=(input_shape[0], input_shape[1], 3))
         backbone = tf.keras.Model(
             inputs=backbone.input,
             outputs=[backbone.get_layer(layer).output for layer in [
-                "top_activation", "block5e_add", "block3b_add", "block2b_add", "block1a_project_activation"]]
+                "top_activation", "block5e_add", "block3b_add"]]
         )
+        backbone.trainable = False
+        c5, c4, c3 = backbone(inputs)
 
-        bb_out = backbone(inputs)
+        return [c5, c4, c3]
 
-        # TODO: build the pyramid and detection heads
+    def _pyramid_network(self, c):
+        c5, c4, c3 = c
+        p5 = tf.keras.layers.Conv2D(256, 1, padding='same')(c5)
+
+        p4 = tf.keras.layers.Conv2D(256, 1, padding='same')(c4)
+        p4 = tf.keras.layers.Add()([tf.keras.layers.UpSampling2D(2)(p5), p4])
+
+        p3 = tf.keras.layers.Conv2D(256, 1, padding='same')(c3)
+        p3 = tf.keras.layers.Add()([tf.keras.layers.UpSampling2D(2)(p4), p3])
+
+        p5 = tf.keras.layers.Conv2D(256, 3, padding='same')(p5)
+        p4 = tf.keras.layers.Conv2D(256, 3, padding='same')(p4)
+        p3 = tf.keras.layers.Conv2D(256, 3, padding='same')(p3)
+        p6 = tf.keras.layers.Conv2D(256, 3, strides=2, padding='same')(p5)
+        p7 = tf.keras.layers.Conv2D(256, 3, strides=2, padding='same')(tf.keras.layers.Activation('relu')(p6))
+
+        return [p3, p4, p5, p6, p7]
+
+    def _classification_head(self, p):
+        cls_head = tf.keras.Sequential()
+        cls_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        cls_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        cls_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        cls_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        cls_head.add(tf.keras.layers.Conv2D(SVHN.LABELS*A, 3, activation=tf.nn.sigmoid, padding='same'))
+
+        cls_out = []
+
+        for _p in p:
+            _p = cls_head(_p)
+            _p = tf.reshape(_p, [args.batch_size, -1, SVHN.LABELS*A])
+            cls_out.append(_p)
+
+        cls_out = tf.concat(cls_out, axis=1)
+
+        return cls_out
+
+    def _regression_head(self, p):
+        box_head = tf.keras.Sequential()
+        box_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        box_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        box_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        box_head.add(tf.keras.layers.Conv2D(256, 3, activation='relu', padding='same'))
+        box_head.add(tf.keras.layers.Conv2D(4*A, 3, activation=None, padding='same'))
+
+        box_out = []
+
+        for _p in p:
+            _p = box_head(_p)
+            _p = tf.reshape(_p, [args.batch_size, -1, 4*A])
+            box_out.append(_p)
+
+        box_out = tf.concat(box_out, axis=1)
+
+        return box_out       
     
 
 def prepare_examples(img, cls, bbx):
@@ -94,8 +168,8 @@ def main(args: argparse.Namespace) -> None:
     train = train.map(lambda x: (x["image"], x["classes"], x['bboxes']))
     train = train.map(lambda img, cls, bbx: tf.py_function(prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.int64, tf.float32]))
    
-    for img, cls, bbx in train:
-        print(img.shape, cls.shape, bbx.shape)
+    #for img, cls, bbx in train:
+    #    print(img.shape, cls.shape, bbx.shape)
 
     '''
     # Load the EfficientNetV2-B0 model. It assumes the input images are
@@ -113,7 +187,7 @@ def main(args: argparse.Namespace) -> None:
     '''
 
     # TODO: Create the model and train it
-    model = ...
+    model = KretinaNet()
 
     # Generate test set annotations, but in `args.logdir` to allow parallel execution.
     os.makedirs(args.logdir, exist_ok=True)
