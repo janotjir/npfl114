@@ -33,7 +33,7 @@ parser.add_argument("--gamma", default=2, type=float, help="Focal loss parameter
 pyramid_scales = [8, 16, 32, 64, 128]
 anchor_shapes = np.array([[1,1], [1,2], [2,1]])
 input_shape = [320, 320]
-A = len(pyramid_scales) * anchor_shapes.shape[0]
+A = anchor_shapes.shape[0]
 
 
 # TODO change anchor generating to match retinanet (5 pyramid scales)
@@ -133,10 +133,11 @@ def prepare_examples(img, cls, bbx):
     for scale in pyramid_scales:
         scaled_anchors = scale * anchor_shapes
         for anchor in scaled_anchors:
-            x_positions = np.arange(img.shape[0] - anchor[0] + 1)
-            y_positions = np.arange(img.shape[1] - anchor[1] + 1)
+            x_positions = np.arange(input_shape[0]/scale)
+            y_positions = np.arange(input_shape[1]/scale)
             xv, yv = np.meshgrid(x_positions, y_positions)
             upper_left = np.concatenate([xv[..., np.newaxis], yv[..., np.newaxis]], 2).reshape(-1, 2)
+            upper_left *= scale
             lower_right = upper_left + anchor[np.newaxis, :]
             anchor_coords = np.hstack([upper_left, lower_right])
             #print(anchor_coords)
