@@ -16,13 +16,14 @@ from svhn_dataset import SVHN
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=5, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 parser.add_argument("--iou_thr", default=0.5, type=float, help="IoU threshold for gold classes.")
 parser.add_argument("--cls_balancing", default=False, action="store_true", help="Focal loss class balancing")
 parser.add_argument("--alpha", default=0.25, type=float, help="Focal loss parameter")
 parser.add_argument("--gamma", default=2, type=float, help="Focal loss parameter")
+parser.add_argument("--mask_loss", default=False, action='store_true', help="Set Huber loss to 0 for negative samples")
 
 
 # Team members:
@@ -146,9 +147,18 @@ def prepare_examples(img, cls, bbx):
     
     #print(anchors)
     anchor_cls, anchor_bbx = bboxes_utils.bboxes_training(anchors, cls.numpy(), bbx.numpy(), args.iou_thr)
+    if args.mask_loss:
+        anchor_bbx = np.hstack((anchor_bbx, tf.expand_dims(anchor_cls, axis=-1)))
     anchor_cls = tf.one_hot(anchor_cls, 10)
 
     return img, anchor_cls, anchor_bbx
+
+
+def masked_huber_loss(y_true, y_pred):
+    loss = tf.keras.losses.Huber(name='masked_huber_loss')(y_true[:, :, :4], y_pred)
+    loss = tf.where(tf.equal(y_true[:, :, -1], 1.0), loss, 0.0)
+
+    return loss
 
 
 def main(args: argparse.Namespace) -> None:
@@ -194,11 +204,16 @@ def main(args: argparse.Namespace) -> None:
 
     # TODO: Create the model and train it
     model = DetMuchNet()
+    if args.mask_loss:
+        loss = masked_huber_loss
+    else:
+        loss = tf.keras.losses.Huber()
     model.compile(
         optimizer=tf.optimizers.experimental.AdamW(jit_compile=False),
         loss={
             "classes": tf.keras.losses.BinaryFocalCrossentropy(args.cls_balancing, args.alpha, args.gamma),
-            "boxes": tf.keras.losses.Huber(),
+            "boxes": loss,
+            #"boxes": tf.keras.losses.Huber(),
             #"boxes": tf.keras.losses.MeanSquaredError(),
         },
         metrics={
