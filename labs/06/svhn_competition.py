@@ -156,7 +156,7 @@ def prepare_examples(img, cls, bbx):
 
 def masked_huber_loss(y_true, y_pred):
     loss = tf.keras.losses.Huber(name='masked_huber_loss')(y_true[:, :, :4], y_pred)
-    loss = tf.where(tf.equal(y_true[:, :, -1], 1.0), loss, 0.0)
+    loss = tf.where(tf.equal(y_true[:, :, -1] > 0, True), loss, 0.0)
 
     return loss
 
