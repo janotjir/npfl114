@@ -19,7 +19,10 @@ parser.add_argument("--debug", default=False, action="store_true", help="If give
 parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
-parser.add_argument("--iou_thr", default=0.5, type=int, help="IoU threshold for gold classes.")
+parser.add_argument("--iou_thr", default=0.5, type=float, help="IoU threshold for gold classes.")
+parser.add_argument("--cls_balancing", default=False, action="store_true", help="Focal loss class balancing")
+parser.add_argument("--alpha", default=0.25, type=float, help="Focal loss parameter")
+parser.add_argument("--gamma", default=2, type=float, help="Focal loss parameter")
 
 
 # Team members:
@@ -141,6 +144,7 @@ def prepare_examples(img, cls, bbx):
     
     #print(anchors)
     anchor_cls, anchor_bbx = bboxes_utils.bboxes_training(anchors, cls.numpy(), bbx.numpy(), args.iou_thr)
+    anchor_cls = tf.one_hot(anchor_cls, 10)
 
     return img, anchor_cls, anchor_bbx
 
@@ -171,10 +175,12 @@ def main(args: argparse.Namespace) -> None:
     test = svhn.test
     
     train = train.map(lambda x: (x["image"], x["classes"], x['bboxes']))
-    train = train.map(lambda img, cls, bbx: tf.py_function(prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.int64, tf.float32]))
+    train = train.map(lambda img, cls, bbx: tf.py_function(prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32]))
+    train = train.map(lambda img, cls, bbx: (img, {"classes": cls, "boxes": bbx}))
 
     dev = dev.map(lambda x: (x["image"], x["classes"], x['bboxes']))
-    dev = dev.map(lambda img, cls, bbx: tf.py_function(prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.int64, tf.float32]))
+    dev = dev.map(lambda img, cls, bbx: tf.py_function(prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32]))
+    dev = dev.map(lambda img, cls, bbx: (img, {"classes": cls, "boxes": bbx}))
 
     train = train.shuffle(args.seed)
     train = train.batch(args.batch_size)
@@ -183,30 +189,15 @@ def main(args: argparse.Namespace) -> None:
     dev = dev.batch(args.batch_size)
     dev = dev.prefetch(tf.data.AUTOTUNE)
    
-    for img, cls, bbx in train:
-        print(img.shape, cls.shape, bbx.shape)
-
-    '''
-    # Load the EfficientNetV2-B0 model. It assumes the input images are
-    # represented in [0-255] range using either `tf.uint8` or `tf.float32` type.
-    backbone = tf.keras.applications.EfficientNetV2B0(include_top=False)
-
-    # Extract features of different resolution. Assuming 224x224 input images
-    # (you can set this explicitly via `input_shape` of the above constructor),
-    # the below model returns five outputs with resolution 7x7, 14x14, 28x28, 56x56, 112x112.
-    backbone = tf.keras.Model(
-        inputs=backbone.input,
-        outputs=[backbone.get_layer(layer).output for layer in [
-             "top_activation", "block5e_add", "block3b_add", "block2b_add", "block1a_project_activation"]]
-    )
-    '''
+    #for img, lbl in train:
+    #    print(img.shape, lbl["classes"].shape, lbl["boxes"].shape)
 
     # TODO: Create the model and train it
     model = DetMuchNet()
     model.compile(
         optimizer=tf.optimizers.experimental.AdamW(jit_compile=False),
         loss={
-            "classes": tf.keras.losses.SparseCategoricalCrossentropy(), # Try focal loss instead (needs one-hot gold classes)
+            "classes": tf.keras.losses.BinaryFocalCrossentropy(args.cls_balancing, args.alpha, args.gamma),
             "boxes": tf.keras.losses.MeanSquaredError(),
         },
         metrics={
