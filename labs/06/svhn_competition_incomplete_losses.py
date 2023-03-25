@@ -98,7 +98,7 @@ class DetMuchNet(tf.keras.Model):
 
         for _p in p:
             _p = cls_head(_p)
-            _p = tf.reshape(_p, [args.batch_size, -1, SVHN.LABELS*A])
+            _p = tf.reshape(_p, [args.batch_size, -1, SVHN.LABELS])
             cls_out.append(_p)
 
         cls_out = tf.concat(cls_out, axis=1)
@@ -117,7 +117,7 @@ class DetMuchNet(tf.keras.Model):
 
         for _p in p:
             _p = box_head(_p)
-            _p = tf.reshape(_p, [args.batch_size, -1, 4*A])
+            _p = tf.reshape(_p, [args.batch_size, -1, 4])
             box_out.append(_p)
 
         box_out = tf.concat(box_out, axis=1)
