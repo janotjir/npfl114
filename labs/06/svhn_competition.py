@@ -7,6 +7,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by d
 
 import numpy as np
 import tensorflow as tf
+import tensorflow_addons as tfa
+import cv2
 
 import bboxes_utils
 from svhn_dataset import SVHN
@@ -23,11 +25,14 @@ parser.add_argument("--iou_thr", default=0.5, type=float, help="IoU threshold fo
 parser.add_argument("--cls_balancing", default=True, action="store_true", help="Focal loss class balancing")
 parser.add_argument("--alpha", default=0.25, type=float, help="Focal loss parameter")
 parser.add_argument("--gamma", default=2, type=float, help="Focal loss parameter")
-parser.add_argument("--mask_loss", default=False, action='store_true', help="Set Huber loss to 0 for negative samples")
+parser.add_argument("--mask_loss", default=True, action='store_true', help="Set Huber loss to 0 for negative samples")
+parser.add_argument("--resize", default=True, action='store_true', help="Instead of padding images with zeros, resize them")
 
-parser.add_argument("--eval", default=False, action="store_true", help="Load model and only annotate test data")
-parser.add_argument("--model", default="logs/svhn_competition.py-2023-03-26_112804-a=0.25,a=,bs=32,cb=False,d=False,e=1,e=False,g=2,it=0.5,ml=False,m=,s=42,t=1/ep1.h5", type=str, help="Model path")
-parser.add_argument("--anchors", default="logs/svhn_competition.py-2023-03-26_112804-a=0.25,a=,bs=32,cb=False,d=False,e=1,e=False,g=2,it=0.5,ml=False,m=,s=42,t=1/anchors.npy", type=str, help="Anchors path")
+parser.add_argument("--test", default=False, action="store_true", help="Load model and only annotate test data")
+parser.add_argument("--eval", default=False, action="store_true", help="Load model and only annotate dev data")
+parser.add_argument("--model", default="logs/pls/ep1.h5", type=str, help="Model path")
+parser.add_argument("--anchors", default="logs/pls/anchors.npy", type=str, help="Anchors path")
+
 
 # Team members:
 # 4c2c10df-00be-4008-8e01-1526b9225726
@@ -35,22 +40,21 @@ parser.add_argument("--anchors", default="logs/svhn_competition.py-2023-03-26_11
 
 
 pyramid_scales = [8, 16, 32, 64, 128]
-anchor_shapes = np.array([[1,1], [1,2], [2,1]])
-input_shape = [320, 320]
+anchor_shapes = np.array([[1,1], [2,1]])
+input_shape = [224, 224]
+# input_shape = [320, 320]
 A = anchor_shapes.shape[0]
 
 
 class DetMuchNet(tf.keras.Model):
-    def __init__(self):
+    def __init__(self, train_backbone=False):
         inputs = tf.keras.layers.Input(shape=[input_shape[0], input_shape[1], 3])
 
-        c = self._backbone(inputs)
+        c = self._backbone(inputs, train_backbone)
         p = self._pyramid_network(c)
         
         cls_out = self._classification_head(p)
-        #print(cls_out.shape)
         box_out = self._regression_head(p)
-        #print(box_out.shape)
 
         outputs = {
             "classes": cls_out,
@@ -59,15 +63,15 @@ class DetMuchNet(tf.keras.Model):
 
         super().__init__(inputs=inputs, outputs=outputs)
 
-    def _backbone(self, inputs):
+    def _backbone(self, inputs, train_backbone):
         backbone = tf.keras.applications.EfficientNetV2B0(include_top=False, weights="imagenet", input_shape=(input_shape[0], input_shape[1], 3))
         backbone = tf.keras.Model(
             inputs=backbone.input,
             outputs=[backbone.get_layer(layer).output for layer in [
                 "top_activation", "block5e_add", "block3b_add"]]
         )
-        backbone.trainable = False
-        c5, c4, c3 = backbone(inputs)
+        backbone.trainable = train_backbone
+        c5, c4, c3 = backbone(inputs, training=False)   # training=False to freeze BatchNormalization layer
 
         return [c5, c4, c3]
 
@@ -159,14 +163,48 @@ class AnchorMaster:
         anchor_cls, anchor_bbx = bboxes_utils.bboxes_training(self.anchors, cls.numpy(), bbx.numpy(), args.iou_thr)
         if args.mask_loss:
             anchor_bbx = np.hstack((anchor_bbx, tf.expand_dims(anchor_cls, axis=-1)))
-        anchor_cls = tf.one_hot(anchor_cls, 10)
 
-        return img, anchor_cls, anchor_bbx
-    
+        mask = anchor_cls > 0
+        anchor_cls_new = np.zeros((anchor_cls.shape[0], SVHN.LABELS))
+        anchor_cls_new[mask, :] = tf.one_hot(anchor_cls[mask]-1, SVHN.LABELS)
+
+        return img, anchor_cls_new, anchor_bbx
+
+    def prepare_examples_with_resize(self, img, cls, bbx):
+        # get resize ratio
+        shape = tf.cast(img.shape, tf.float32)
+        ratio = input_shape[0] / tf.reduce_max(shape)
+        
+        # resize img and scale bboxes
+        img = tf.image.resize_with_pad(img, input_shape[0], input_shape[1], antialias=True)
+        img = tf.cast(img, tf.uint8)
+        bbx = ratio * bbx
+
+        # get anchors and their classes
+        anchor_cls, anchor_bbx = bboxes_utils.bboxes_training(self.anchors, cls.numpy(), bbx.numpy(), args.iou_thr)
+        if args.mask_loss:
+            anchor_bbx = np.hstack((anchor_bbx, tf.expand_dims(anchor_cls, axis=-1)))
+
+        mask = anchor_cls > 0
+        anchor_cls_new = np.zeros((anchor_cls.shape[0], SVHN.LABELS))
+        anchor_cls_new[mask, :] = tf.one_hot(anchor_cls[mask]-1, SVHN.LABELS)
+
+        return img, anchor_cls_new, anchor_bbx, ratio
+
     def prepare_test_examples(self, img):
         paddings = tf.constant([[0, input_shape[0] - img.shape[0]], [0, input_shape[1] - img.shape[1]], [0, 0]])
         img = tf.pad(img, paddings, mode='constant')
         return img
+
+    def prepare_test_examples_with_resize(self, img):
+        # get resize ratio
+        shape = tf.cast(img.shape, tf.float32)
+        ratio = input_shape[0] / tf.reduce_max(shape)
+        # resize img and scale bboxes
+        img = tf.image.resize_with_pad(img, input_shape[0], input_shape[1], antialias=True)
+        img = tf.cast(img, tf.uint8)
+        return img, ratio
+
     
     def reconstruct_bboxes(self, bbx):
         return bboxes_utils.bboxes_from_fast_rcnn(self.anchors, bbx)
@@ -177,6 +215,63 @@ def masked_huber_loss(y_true, y_pred):
     loss = tf.where(tf.equal(y_true[:, :, -1] > 0, True), loss, 0.0)
 
     return loss
+
+
+def decode_predictions(predicted_classes, predicted_bboxes, k=10, thresh=0.05, max_num_out=5):
+    box_classes = tf.math.argmax(predicted_classes, axis=-1)
+    box_confidence = tf.math.reduce_max(predicted_classes, axis=-1)
+    
+    # mask out bboxes with low confidence (less than 5%)
+    mask = box_confidence > thresh
+    box_classes = box_classes[mask]
+    box_confidence = box_confidence[mask]
+    predicted_bboxes = predicted_bboxes[mask]
+
+    indices = tf.image.non_max_suppression(predicted_bboxes, box_confidence, max_num_out, iou_threshold=0.5, score_threshold=thresh)
+    #indices = tf.image.combined_non_max_suppression(predicted_bboxes, predicted_classes, 2, 5, iou_threshold=0.5, score_threshold=0.05)
+
+    predicted_classes = tf.gather(box_classes, indices)
+    predicted_bboxes = tf.gather(predicted_bboxes, indices)
+
+    return predicted_classes, predicted_bboxes
+
+
+# visualize raw dataset
+def visualize_dataset(data):
+
+    def preprocess_data(img, classes, bboxes):
+        shape = tf.cast(img.shape, tf.float32)
+        ratio = input_shape[0] / tf.reduce_max(shape)
+        img = tf.image.resize_with_pad(img, input_shape[0], input_shape[1], antialias=True)
+        img = tf.cast(img, tf.uint8)
+        bboxes = ratio * bboxes
+        return img, classes, bboxes
+
+    for img, label in data:
+        img, label["classes"], label["boxes"] = preprocess_data(img, label["classes"], label["boxes"])
+        img = img.numpy()
+        for i in range(label["classes"].shape[0]):
+            p1 = (int(label["boxes"][i, 1]), int(label["boxes"][i, 0]))
+            p2 = (int(label["boxes"][i, 3]), int(label["boxes"][i, 2]))
+            cv2.rectangle(img, p1, p2, (0,0,255), 1)
+            cv2.putText(img, str(label["classes"][i].numpy()), (p1[0], p2[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,0,255), 1)
+        cv2.imshow("Data sample", img)
+        cv2.waitKey(0)
+
+
+# visualize prepared dataset
+def visualize_data(data, am):
+    for img, label in data:
+        img = img.numpy()
+        predicted_bboxes = am.reconstruct_bboxes(label["boxes"])
+        for i in range(label["classes"].shape[0]):
+            if np.sum(label["classes"][i]) > 0:
+                p1 = (int(predicted_bboxes[i, 1]), int(predicted_bboxes[i, 0]))
+                p2 = (int(predicted_bboxes[i, 3]), int(predicted_bboxes[i, 2]))
+                cv2.rectangle(img, p1, p2, (0,0,255), 1)
+                cv2.putText(img, str(np.squeeze(np.nonzero(label["classes"][i].numpy()))), (p1[0], p1[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,0,255), 1)
+        cv2.imshow("Data sample", img)
+        cv2.waitKey(0)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -200,17 +295,27 @@ def main(args: argparse.Namespace) -> None:
     svhn = SVHN()
     am = AnchorMaster()
 
-    if not args.eval:
+    if not args.eval and not args.test:
         train = svhn.train
         dev = svhn.dev
         
         train = train.map(lambda x: (x["image"], x["classes"], x['bboxes']))
-        train = train.map(lambda img, cls, bbx: tf.py_function(am.prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32]))
-        train = train.map(lambda img, cls, bbx: (img, {"classes": cls, "boxes": bbx}))
+        if args.resize:
+            train = train.map(lambda img, cls, bbx: tf.py_function(am.prepare_examples_with_resize, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32, tf.float32]))
+            train = train.map(lambda img, cls, bbx, ratio: (img, {"classes": cls, "boxes": bbx}))
+        else:
+            train = train.map(lambda img, cls, bbx: tf.py_function(am.prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32]))
+            train = train.map(lambda img, cls, bbx: (img, {"classes": cls, "boxes": bbx}))
+        # visualize_data(train, am)
 
         dev = dev.map(lambda x: (x["image"], x["classes"], x['bboxes']))
-        dev = dev.map(lambda img, cls, bbx: tf.py_function(am.prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32]))
-        dev = dev.map(lambda img, cls, bbx: (img, {"classes": cls, "boxes": bbx}))
+        if args.resize:
+            dev = dev.map(lambda img, cls, bbx: tf.py_function(am.prepare_examples_with_resize, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32, tf.float32]))
+            dev = dev.map(lambda img, cls, bbx, ratio: (img, {"classes": cls, "boxes": bbx}))
+        else:
+            dev = dev.map(lambda img, cls, bbx: tf.py_function(am.prepare_examples, inp=[img, cls, bbx], Tout=[tf.uint8, tf.float32, tf.float32]))
+            dev = dev.map(lambda img, cls, bbx: (img, {"classes": cls, "boxes": bbx}))
+        # visualize_data(dev, am)
 
         train = train.shuffle(args.seed)
         train = train.batch(args.batch_size)
@@ -220,12 +325,9 @@ def main(args: argparse.Namespace) -> None:
         dev = dev.prefetch(tf.data.AUTOTUNE)
 
         am.save_anchors(args.logdir)
-    
-        #for img, lbl in train:
-        #    print(img.shape, lbl["classes"].shape, lbl["boxes"].shape)
 
         # Create the model and train it
-        model = DetMuchNet()
+        model = DetMuchNet(train_backbone=True)
         if args.mask_loss:
             loss = masked_huber_loss
         else:
@@ -235,12 +337,9 @@ def main(args: argparse.Namespace) -> None:
             loss={
                 "classes": tf.keras.losses.BinaryFocalCrossentropy(args.cls_balancing, args.alpha, args.gamma),
                 "boxes": loss,
-                #"boxes": tf.keras.losses.Huber(),
-                #"boxes": tf.keras.losses.MeanSquaredError(),
             },
             metrics={
-                "classes": [tf.metrics.CategoricalAccuracy("accuracy")],
-                #"boxes": [tf.metrics.BinaryAccuracy("accuracy")],
+                "classes": [tf.metrics.BinaryAccuracy("accuracy")],
             },
         )
 
@@ -252,14 +351,48 @@ def main(args: argparse.Namespace) -> None:
             model.fit(train, epochs=args.epochs, validation_data=dev, callbacks=[tb_callback, tf.keras.callbacks.LambdaCallback(on_epoch_end=save_model)])
     
     else:
-        model = DetMuchNet()
+        model = DetMuchNet(train_backbone=True)
         model.load_weights(args.model)
         am.load_anchors(args.anchors)
+        args.logdir = "/".join(args.model.split("/")[:-1])
 
-    test = svhn.test
-    test = test.map(lambda x: x["image"])
-    test = test.map(lambda img: tf.py_function(am.prepare_test_examples, inp=[img], Tout=[tf.uint8]))
+    if args.eval:
+        test = svhn.dev
+    else:
+        test = svhn.test
+    
+    test = test.map(lambda x: (x["image"]))
+    if args.resize:
+        test = test.map(lambda img: tf.py_function(am.prepare_test_examples_with_resize, inp=[img], Tout=[tf.uint8, tf.float32]))
+    else:
+        test = test.map(lambda img: tf.py_function(am.prepare_test_examples, inp=[img], Tout=[tf.uint8]))
     test = test.batch(args.batch_size)
+
+    # TODO evaluation in progress, just visual inspection of first batch for you my friend
+    for batch in test:
+
+        # ratios = tf.cast(batch[1], tf.float64)
+        batch = batch[0]
+        out = model.predict(batch)
+
+        for j, p in enumerate(zip(out['classes'], out['boxes'])):
+            predicted_classes, predicted_bboxes = p
+            predicted_bboxes = am.reconstruct_bboxes(predicted_bboxes)
+            predicted_classes, predicted_bboxes = decode_predictions(predicted_classes, predicted_bboxes)
+            img = batch[j].numpy()
+            for i in range(predicted_classes.shape[0]):
+                #p1 = (int(predicted_bboxes[i, 1]/ratios[j]), int(predicted_bboxes[i, 0]/ratios[j]))
+                #p2 = (int(predicted_bboxes[i, 3]/ratios[j]), int(predicted_bboxes[i, 2]/ratios[j]))
+                p1 = (int(predicted_bboxes[i, 1]), int(predicted_bboxes[i, 0]))
+                p2 = (int(predicted_bboxes[i, 3]), int(predicted_bboxes[i, 2]))
+                cv2.rectangle(img, p1, p2, (0,0,255), 2)
+                cv2.putText(img, str(predicted_classes[i].numpy()), (int(predicted_bboxes[i, 1]), int(predicted_bboxes[i, 0]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,0,255), 2)
+            cv2.imshow("*RetinaNet goes not brrrr*", img)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        break
+
+    exit()
 
     # Generate test set annotations, but in `args.logdir` to allow parallel execution.
     with open(os.path.join(args.logdir, "svhn_competition.txt"), "w", encoding="utf-8") as predictions_file:
