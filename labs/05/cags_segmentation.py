@@ -11,7 +11,7 @@ import tensorflow as tf
 from cags_dataset import CAGS
 
 # TODO: Define reasonable defaults and optionally more parameters.
-# Also, you can set the number of the threads 0 to use all your CPU cores.
+# Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
 parser.add_argument("--augment", default=False, action='store_true', help='Augment the training data')
@@ -224,10 +224,13 @@ class UResEfficientNetV2B0L(tf.keras.Model):
 
 
 def main(args: argparse.Namespace) -> None:
-    # Fix random seeds and threads
+    # Set the random seed and the number of threads.
     tf.keras.utils.set_random_seed(args.seed)
     tf.config.threading.set_inter_op_parallelism_threads(args.threads)
     tf.config.threading.set_intra_op_parallelism_threads(args.threads)
+    if args.debug:
+        tf.config.run_functions_eagerly(True)
+        tf.data.experimental.enable_debug_mode()
 
     # Create logdir name
     args.logdir = os.path.join("logs", "{}-{}-{}".format(

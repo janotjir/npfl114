@@ -11,7 +11,7 @@ import numpy as np
 # dc535248-fa6c-4987-b49f-25b6ede7c87d
 
 
-BACKEND = np  # or you can use `tf` for TensorFlow implementation
+B = np  # or you can use `tf` for TensorFlow implementation
 
 # Bounding boxes and anchors are expected to be Numpy/TensorFlow tensors,
 # where the last dimension has size 4.
@@ -32,8 +32,8 @@ def bboxes_area(bboxes: Tensor) -> Tensor:
 
     If the bboxes.shape is [..., 4], the output shape is bboxes.shape[:-1].
     """
-    return BACKEND.maximum(bboxes[..., BOTTOM] - bboxes[..., TOP], 0) \
-        * BACKEND.maximum(bboxes[..., RIGHT] - bboxes[..., LEFT], 0)
+    return B.maximum(bboxes[..., BOTTOM] - bboxes[..., TOP], 0) \
+        * B.maximum(bboxes[..., RIGHT] - bboxes[..., LEFT], 0)
 
 
 def bboxes_iou(xs: Tensor, ys: Tensor) -> Tensor:
@@ -47,11 +47,11 @@ def bboxes_iou(xs: Tensor, ys: Tensor) -> Tensor:
     with shape `[num_xs, num_ys]`, computing IoU for all pairs of bboxes from
     `xs` and `ys`. Formally, the output shape is `np.broadcast(xs, ys).shape[:-1]`.
     """
-    intersections = BACKEND.stack([
-        BACKEND.maximum(xs[..., TOP], ys[..., TOP]),
-        BACKEND.maximum(xs[..., LEFT], ys[..., LEFT]),
-        BACKEND.minimum(xs[..., BOTTOM], ys[..., BOTTOM]),
-        BACKEND.minimum(xs[..., RIGHT], ys[..., RIGHT]),
+    intersections = B.stack([
+        B.maximum(xs[..., TOP], ys[..., TOP]),
+        B.maximum(xs[..., LEFT], ys[..., LEFT]),
+        B.minimum(xs[..., BOTTOM], ys[..., BOTTOM]),
+        B.minimum(xs[..., RIGHT], ys[..., RIGHT]),
     ], axis=-1)
 
     xs_area, ys_area, intersections_area = bboxes_area(xs), bboxes_area(ys), bboxes_area(intersections)
@@ -141,7 +141,7 @@ def bboxes_training(
       (the one with smaller index if there are several). In case several gold
       objects are assigned to a single anchor, use the gold object with smaller
       index.
-    - For each unused anchors, find the gold object with the largest IoU
+    - For each unused anchor, find the gold object with the largest IoU
       (again the one with smaller index if there are several), and if the IoU
       is >= iou_threshold, assign the object to the anchor.
     """
