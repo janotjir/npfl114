@@ -3,6 +3,7 @@ import argparse
 import datetime
 import os
 import re
+import sys
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import numpy as np
@@ -40,7 +41,7 @@ parser.add_argument("--anchors", default="logs/pls/anchors.npy", type=str, help=
 
 
 pyramid_scales = [8, 16, 32, 64, 128]
-anchor_shapes = np.array([[1,1], [2,1]])
+anchor_shapes = np.array([[1,1]])
 input_shape = [224, 224]
 # input_shape = [320, 320]
 A = anchor_shapes.shape[0]
@@ -105,11 +106,13 @@ class DetMuchNet(tf.keras.Model):
 
         for _p in p:
             _p = cls_head(_p)
+            print(_p.shape)
             _p = tf.reshape(_p, [-1, _p.shape[1]*_p.shape[2]*A, SVHN.LABELS])
             #_p = tf.reshape(_p, [args.batch_size, -1, SVHN.LABELS])
             cls_out.append(_p)
 
         cls_out = tf.concat(cls_out, axis=1)
+        #print(cls_out.shape)
 
         return cls_out
 
@@ -130,6 +133,7 @@ class DetMuchNet(tf.keras.Model):
             box_out.append(_p)
 
         box_out = tf.concat(box_out, axis=1)
+        #print(box_out.shape)
 
         return box_out       
     
@@ -143,12 +147,14 @@ class AnchorMaster:
                 x_positions = np.arange(input_shape[0]/scale)
                 y_positions = np.arange(input_shape[1]/scale)
                 xv, yv = np.meshgrid(x_positions, y_positions)
-                upper_left = np.concatenate([xv[..., np.newaxis], yv[..., np.newaxis]], 2).reshape(-1, 2)
+                upper_left = np.concatenate([yv[..., np.newaxis], xv[..., np.newaxis]], 2).reshape(-1, 2)
                 upper_left *= scale
                 lower_right = upper_left + anchor[np.newaxis, :]
                 anchor_coords = np.hstack([upper_left, lower_right])
                 anchors = np.vstack([anchors, anchor_coords])
         self.anchors = anchors
+        np.set_printoptions(threshold=sys.maxsize)
+        #print(anchors)
 
     def save_anchors(self, dir):
         np.save(os.path.join(dir, "anchors.npy"), self.anchors)
@@ -378,6 +384,7 @@ def main(args: argparse.Namespace) -> None:
         for j, p in enumerate(zip(out['classes'], out['boxes'])):
             predicted_classes, predicted_bboxes = p
             predicted_bboxes = am.reconstruct_bboxes(predicted_bboxes)
+            #print(predicted_bboxes)
             predicted_classes, predicted_bboxes = decode_predictions(predicted_classes, predicted_bboxes)
             img = batch[j].numpy()
             for i in range(predicted_classes.shape[0]):
@@ -387,9 +394,9 @@ def main(args: argparse.Namespace) -> None:
                 p2 = (int(predicted_bboxes[i, 3]), int(predicted_bboxes[i, 2]))
                 cv2.rectangle(img, p1, p2, (0,0,255), 2)
                 cv2.putText(img, str(predicted_classes[i].numpy()), (int(predicted_bboxes[i, 1]), int(predicted_bboxes[i, 0]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,0,255), 2)
-            cv2.imshow("*RetinaNet goes not brrrr*", img)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
+            cv2.imwrite("last_predict.png", img)
+            #cv2.waitKey(0)
+            #cv2.destroyAllWindows()
         break
 
     exit()
