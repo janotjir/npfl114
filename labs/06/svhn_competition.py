@@ -41,7 +41,7 @@ parser.add_argument("--anchors", default="logs/pls/anchors.npy", type=str, help=
 
 
 pyramid_scales = [8, 16, 32, 64, 128]
-anchor_shapes = np.array([[1,1]])
+anchor_shapes = np.array([[1,1], [2, 1]])
 input_shape = [224, 224]
 # input_shape = [320, 320]
 A = anchor_shapes.shape[0]
@@ -106,13 +106,11 @@ class DetMuchNet(tf.keras.Model):
 
         for _p in p:
             _p = cls_head(_p)
-            print(_p.shape)
             _p = tf.reshape(_p, [-1, _p.shape[1]*_p.shape[2]*A, SVHN.LABELS])
             #_p = tf.reshape(_p, [args.batch_size, -1, SVHN.LABELS])
             cls_out.append(_p)
 
         cls_out = tf.concat(cls_out, axis=1)
-        #print(cls_out.shape)
 
         return cls_out
 
@@ -140,9 +138,10 @@ class DetMuchNet(tf.keras.Model):
 
 class AnchorMaster:
     def __init__(self):
-        anchors = np.array([], dtype=np.float32).reshape(0, 4)
+        anchors = np.array([], dtype=np.float32).reshape(0, 4*A)
         for scale in pyramid_scales:
             scaled_anchors = scale * anchor_shapes
+            sc_anchors = np.array([], dtype=np.float32).reshape(int(np.ceil(input_shape[0]/scale)**2), 0)
             for anchor in scaled_anchors:
                 x_positions = np.arange(input_shape[0]/scale)
                 y_positions = np.arange(input_shape[1]/scale)
@@ -151,10 +150,13 @@ class AnchorMaster:
                 upper_left *= scale
                 lower_right = upper_left + anchor[np.newaxis, :]
                 anchor_coords = np.hstack([upper_left, lower_right])
-                anchors = np.vstack([anchors, anchor_coords])
+                print(sc_anchors.shape, anchor_coords.shape)
+                sc_anchors = np.hstack([sc_anchors, anchor_coords])
+            anchors = np.vstack([anchors, sc_anchors])
+        anchors = anchors.reshape(anchors.shape[0]*A, 4)
         self.anchors = anchors
         np.set_printoptions(threshold=sys.maxsize)
-        #print(anchors)
+        print(anchors)
 
     def save_anchors(self, dir):
         np.save(os.path.join(dir, "anchors.npy"), self.anchors)
