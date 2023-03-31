@@ -3,6 +3,11 @@ import argparse
 import datetime
 import os
 import re
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import numpy as np

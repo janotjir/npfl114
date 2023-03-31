@@ -4,6 +4,11 @@ import datetime
 import os
 import re
 from typing import Dict
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import numpy as np
@@ -33,19 +38,23 @@ class Model(tf.keras.Model):
         words = tf.keras.layers.Input(shape=[None], dtype=tf.string, ragged=True)
 
         # TODO: Map strings in `words` to indices by using the `word_mapping` of `train.forms`.
+        indices = train.forms.word_mapping(words)
 
         # TODO: Embed input words with dimensionality `args.we_dim`. Note that the `word_mapping`
         # provides a `vocabulary_size()` call returning the number of unique words in the mapping.
+        embeddings = tf.keras.layers.Embedding(train.forms.word_mapping.vocabulary_size(), args.we_dim)(indices)
 
         # TODO: Create the specified `args.rnn` RNN layer ("LSTM" or "GRU") with
         # dimension `args.rnn_dim`. The layer should produce an output for every
         # sequence element (so a 3D output). Then apply it in a bidirectional way on
         # the embedded words, **summing** the outputs of forward and backward RNNs.
+        layer = getattr(tf.keras.layers, args.rnn)(args.rnn_dim, return_sequences=True)
+        hidden = tf.keras.layers.Bidirectional(layer, "sum")(embeddings)
 
         # TODO: Add a softmax classification layer into as many classes as there are unique
         # tags in the `word_mapping` of `train.tags`. Note that the Dense layer can process
         # a `RaggedTensor` without any problem.
-        predictions = ...
+        predictions = tf.keras.layers.Dense(train.tags.word_mapping.vocabulary_size(), activation=tf.nn.softmax)(hidden)
 
         # Check that the created predictions are a 3D tensor.
         assert predictions.shape.rank == 3
@@ -89,7 +98,10 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     # - a tensor of integer tag ids as targets.
     # To create the tag ids, use the `word_mapping` of `morpho.train.tags`.
     def extract_tagging_data(example):
-        raise NotImplementedError()
+        forms = example['forms']
+        tags = example['tags']
+        ids = morpho.train.tags.word_mapping(tags)
+        return forms, ids
 
     def create_dataset(name):
         dataset = getattr(morpho, name).dataset
