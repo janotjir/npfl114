@@ -4,6 +4,11 @@ import datetime
 import os
 import re
 from typing import Dict
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import numpy as np
@@ -65,12 +70,17 @@ class Model(tf.keras.Model):
         # `tf.keras.layers.RNN` wrapper with `tf.keras.layers.{LSTM,GRU,SimpleRNN}Cell`,
         # because the former can run transparently on a GPU and is also
         # considerably faster on a CPU).
+        layer = getattr(tf.keras.layers, args.rnn)
+        hidden = layer(args.rnn_dim, return_sequences=True)(sequences)
 
         # TODO: If `args.hidden_layer` is nonzero, process the result using
         # a ReLU-activated fully connected layer with `args.hidden_layer` units.
+        if args.hidden_layer > 0:
+            hidden = tf.keras.layers.Dense(args.hidden_layer, activation=tf.nn.relu)(hidden)
 
         # TODO: Generate `predictions` using a fully connected layer
         # with one output and `tf.nn.sigmoid` activation.
+        predictions = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)(hidden)
 
         super().__init__(inputs=sequences, outputs=predictions)
 
