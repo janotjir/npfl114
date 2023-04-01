@@ -27,6 +27,13 @@ parser.add_argument("--test", default=False, action="store_true", help="Load mod
 parser.add_argument("--eval", default=False, action="store_true", help="Load model and only annotate dev data")
 parser.add_argument("--model", default="", type=str, help="Model path")
 parser.add_argument("--anchors", default="", type=str, help="Anchors path")
+parser.add_argument("--visualize", default=False, action="store_true", help="Visualize predictions = store first batch of predictions to results folder")
+
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 
 pyramid_scales = [8, 16, 32, 64, 128]
 anchor_shapes = np.array([[1., 1.], [2., 1.], [1.*2**(1/3), 1.*2**(1/3)], [2.*2**(1/3), 1.*2**(1/3)], [1.*2**(2/3), 1.*2**(2/3)], [2.*2**(2/3), 1.*2**(2/3)]])
@@ -344,25 +351,18 @@ class AnchorDataMaster:
 
         return data
 
+    def decode_predictions(self, pred_classes, pred_bboxes, num_out=4, thresh=0.2, iou_thresh=0.25):
+        scores = tf.math.reduce_max(pred_classes, axis=-1)
+        pred_classes = tf.math.argmax(pred_classes, axis=-1)
+        pred_bboxes = self.reconstruct_bboxes(pred_bboxes)
+        
+        indices = tf.image.non_max_suppression(pred_bboxes, scores, num_out, iou_threshold=iou_thresh, score_threshold=thresh)
 
-def decode_predictions(predicted_classes, predicted_bboxes, k=100, thresh=0.2, max_num_out=4):
-    box_classes = tf.math.argmax(predicted_classes, axis=-1)
-    box_confidence = tf.math.reduce_max(predicted_classes, axis=-1)
-    
-    # mask out bboxes with low confidence (less than 5%)
-    mask = box_confidence > thresh
-    box_classes = box_classes[mask]
-    box_confidence = box_confidence[mask]
-    predicted_bboxes = predicted_bboxes[mask]
+        pred_bboxes = tf.gather(pred_bboxes, indices)
+        pred_classes = tf.gather(pred_classes, indices)
+        scores = tf.gather(scores, indices)
 
-    indices = tf.image.non_max_suppression(predicted_bboxes, box_confidence, max_num_out, iou_threshold=0.3, score_threshold=thresh)
-    #indices = tf.image.combined_non_max_suppression(predicted_bboxes, predicted_classes, 2, 5, iou_threshold=0.5, score_threshold=0.05)
-
-    predicted_classes = tf.gather(box_classes, indices)
-    predicted_bboxes = tf.gather(predicted_bboxes, indices)
-    scores = tf.gather(box_confidence, indices)
-
-    return predicted_classes, predicted_bboxes, scores
+        return pred_classes, pred_bboxes, scores
 
 
 def main(args: argparse.Namespace) -> None:
@@ -417,35 +417,42 @@ def main(args: argparse.Namespace) -> None:
         args.logdir = "/".join(args.model.split("/")[:-1])
 
     if args.eval:
-        test = am.prepare_data(svhn.dev, training=True)
+        test = am.prepare_data(svhn.dev, training=False)
+        filename = "svhn_competition_val.txt"
     else:
         test = am.prepare_data(svhn.test, training=False)
-    
-    for batch in test:
+        filename = "svhn_competition.txt"
 
-        # ratios = tf.cast(batch[1], tf.float64)
-        batch = batch[0]
-        out = model.predict(batch)
+    count = 0
+    with open(os.path.join(args.logdir, filename), "w", encoding="utf-8") as predictions_file:
+        for batch in test:
+            ratios = tf.cast(batch[1], tf.float64)
+            imgs = batch[0]
+            out = model.predict(imgs)
 
-        os.makedirs("results", exist_ok=True)
+            for i, pred in enumerate(zip(out['classes'], out['boxes'])):
+                pred_classes, pred_bboxes = pred
+                pred_classes, pred_bboxes, scores = am.decode_predictions(pred_classes, pred_bboxes)
 
-        for j, p in enumerate(zip(out['classes'], out['boxes'])):
-            predicted_classes, predicted_bboxes = p
-            predicted_bboxes = am.reconstruct_bboxes(predicted_bboxes)
-            predicted_classes, predicted_bboxes, conf = decode_predictions(predicted_classes, predicted_bboxes)
-            img = batch[j].numpy()
-            for i in range(predicted_classes.shape[0]):
-                #p1 = (int(predicted_bboxes[i, 1]/ratios[j]), int(predicted_bboxes[i, 0]/ratios[j]))
-                #p2 = (int(predicted_bboxes[i, 3]/ratios[j]), int(predicted_bboxes[i, 2]/ratios[j]))
-                p1 = (int(predicted_bboxes[i, 1]), int(predicted_bboxes[i, 0]))
-                p2 = (int(predicted_bboxes[i, 3]), int(predicted_bboxes[i, 2]))
-                cv2.rectangle(img, p1, p2, (0,0,255), 2)
-                cv2.putText(img, f"{predicted_classes[i].numpy()}:{conf[i].numpy()}", (int(predicted_bboxes[i, 1]), int(predicted_bboxes[i, 0]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
-            cv2.imwrite(f"results/last_predict_{j}.png", img)
-            #cv2.imshow("pls", img)
-            #cv2.waitKey(0)
-            #cv2.destroyAllWindows()
-        break
+                if args.visualize:
+                    img = imgs[i].numpy()
+                
+                output = []
+                for j in range(pred_bboxes.shape[0]):
+                    output += [pred_classes[j].numpy()] + list((pred_bboxes[j] / ratios[i]).numpy())
+                    
+                    if args.visualize:
+                        p1 = (int(pred_bboxes[j, 1]), int(pred_bboxes[j, 0]))
+                        p2 = (int(pred_bboxes[j, 3]), int(pred_bboxes[j, 2]))
+                        cv2.rectangle(img, p1, p2, (0,0,255), 2)
+                        cv2.putText(img, f"{pred_classes[j].numpy()}:{scores[j].numpy():.2f}", (int(pred_bboxes[j, 1]), int(pred_bboxes[j, 0]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
+
+                print(*output, file=predictions_file)
+
+                if args.visualize and count < args.batch_size:
+                    os.makedirs("results", exist_ok=True)
+                    cv2.imwrite(f"results/{count}.png", img)
+                    count += 1
 
 
 if __name__ == "__main__":
