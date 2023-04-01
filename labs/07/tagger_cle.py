@@ -21,13 +21,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=10, type=int, help="Batch size.")
 parser.add_argument("--cle_dim", default=32, type=int, help="CLE embedding dimension.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=5, type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=2, type=int, help="Number of epochs.")
 parser.add_argument("--max_sentences", default=None, type=int, help="Maximum number of sentences to load.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Evaluation in ReCodEx.")
 parser.add_argument("--rnn", default="LSTM", choices=["LSTM", "GRU"], help="RNN layer type.")
 parser.add_argument("--rnn_dim", default=64, type=int, help="RNN layer dimension.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
-parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--threads", default=12, type=int, help="Maximum number of threads to use.")
 parser.add_argument("--we_dim", default=64, type=int, help="Word embedding dimension.")
 parser.add_argument("--word_masking", default=0.0, type=float, help="Mask words with the given probability.")
 # If you add more arguments, ReCodEx will keep them with your default values.
@@ -45,12 +45,12 @@ class Model(tf.keras.Model):
 
         def call(self, inputs: tf.RaggedTensor, training: bool) -> tf.RaggedTensor:
             if training:
-                # TODO: Generate as many random uniform numbers in range [0, 1) as there are
+                # Generate as many random uniform numbers in range [0, 1) as there are
                 # values in `tf.RaggedTensor` `inputs` using a single `tf.random.uniform` call
                 # (without setting seed in any way, so with just a single parameter `shape`).
                 # Then, set the values in `inputs` to zero if the corresponding generated
                 # random number is less than `self._rate`.
-                raise NotImplementedError()
+                pass
             else:
                 return inputs
 
@@ -59,9 +59,10 @@ class Model(tf.keras.Model):
         # a `RaggedTensor` of strings, each batch example being a list of words.
         words = tf.keras.layers.Input(shape=[None], dtype=tf.string, ragged=True)
 
-        # TODO(tagger_we): Map strings in `words` to indices by using the `word_mapping` of `train.forms`.
+        # (tagger_we): Map strings in `words` to indices by using the `word_mapping` of `train.forms`.
+        indices = train.forms.word_mapping(words)
 
-        # TODO: With a probability of `args.word_masking`, replace the input word by an
+        # With a probability of `args.word_masking`, replace the input word by an
         # unknown word (which has index 0).
         #
         # There are two approaches you can use:
@@ -73,44 +74,60 @@ class Model(tf.keras.Model):
         #    structure as the indices of the input words, pass them through a dropout layer
         #    with `args.word_masking` rate, and finally set the input word ids to 0 where
         #    the result of dropout is zero (and keep them unchanged otherwise).
+        scores = tf.ones_like(indices, dtype=tf.float32)
+        scores = tf.keras.layers.Dropout(args.word_masking)(scores)
+        scores = tf.cast(scores, tf.int64)
+        indices = indices * scores
 
-        # TODO(tagger_we): Embed input words with dimensionality `args.we_dim`. Note that the `word_mapping`
+        # (tagger_we): Embed input words with dimensionality `args.we_dim`. Note that the `word_mapping`
         # provides a `vocabulary_size()` call returning the number of unique words in the mapping.
+        w_embeddings = tf.keras.layers.Embedding(train.forms.word_mapping.vocabulary_size(), args.we_dim)(indices)
 
-        # TODO: Create a vector of input words from all batches using `words.values`
+        # Create a vector of input words from all batches using `words.values`
         # and pass it through `tf.unique`, obtaining a list of unique words and
         # indices of the original flattened words in the unique word list.
+        unq, idx = tf.unique(words.values)
 
-        # TODO: Create sequences of letters by passing the unique words through
+        # Create sequences of letters by passing the unique words through
         # `tf.strings.unicode_split` call; use "UTF-8" as `input_encoding`.
+        letter_sq = tf.strings.unicode_split(unq, 'UTF-8')
 
-        # TODO: Map the letters into ids by using `char_mapping` of `train.forms`.
+        # Map the letters into ids by using `char_mapping` of `train.forms`.
+        ids = train.forms.char_mapping(letter_sq)
 
-        # TODO: Embed the input characters with dimensionality `args.cle_dim`.
+        # Embed the input characters with dimensionality `args.cle_dim`.
+        c_embeddings = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), args.cle_dim)(ids)
 
-        # TODO: Pass the embedded letters through a bidirectional GRU layer
+        # Pass the embedded letters through a bidirectional GRU layer
         # with dimensionality `args.cle_dim`, obtaining character-level representations
         # of the whole words, **concatenating** the outputs of the forward and backward RNNs.
+        gru = tf.keras.layers.GRU(args.cle_dim, return_sequences=False)
+        c_embeddings = tf.keras.layers.Bidirectional(gru, "concat")(c_embeddings)
 
-        # TODO: Use `tf.gather` with the indices generated by `tf.unique` to transform
+        # Use `tf.gather` with the indices generated by `tf.unique` to transform
         # the computed character-level representations of the unique words to representations
         # of the flattened (non-unique) words.
+        c_embeddings = tf.gather(c_embeddings, idx)
 
-        # TODO: Then, convert these character-level word representations into
+        # Then, convert these character-level word representations into
         # a RaggedTensor of the same shape as `words` using `words.with_values` call.
+        c_embeddings = words.with_values(c_embeddings)
 
-        # TODO: Concatenate the word-level embeddings and the computed character-level WEs
+        # Concatenate the word-level embeddings and the computed character-level WEs
         # (in this order).
+        embeddings = tf.keras.layers.concatenate([w_embeddings, c_embeddings], axis=-1)
 
-        # TODO(tagger_we): Create the specified `args.rnn` RNN layer (LSTM, GRU) with
+        # (tagger_we): Create the specified `args.rnn` RNN layer (LSTM, GRU) with
         # dimension `args.rnn_dim`. The layer should produce an output for every
         # sequence element (so a 3D output). Then apply it in a bidirectional way on
         # the word representations, **summing** the outputs of forward and backward RNNs.
+        layer = getattr(tf.keras.layers, args.rnn)(args.rnn_dim, return_sequences=True)
+        hidden = tf.keras.layers.Bidirectional(layer, "sum")(embeddings)
 
-        # TODO(tagger_we): Add a softmax classification layer into as many classes as there are unique
+        # (tagger_we): Add a softmax classification layer into as many classes as there are unique
         # tags in the `word_mapping` of `train.tags`. Note that the Dense layer can process
         # a `RaggedTensor` without any problem.
-        predictions = ...
+        predictions = tf.keras.layers.Dense(train.tags.word_mapping.vocabulary_size(), activation=tf.nn.softmax)(hidden)
 
         # Check that the created predictions are a 3D tensor.
         assert predictions.shape.rank == 3
@@ -149,12 +166,15 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     # Create the model and train
     model = Model(args, morpho.train)
 
-    # TODO(tagger_we): Construct the data for the model, each consisting of the following pair:
+    # (tagger_we): Construct the data for the model, each consisting of the following pair:
     # - a tensor of string words (forms) as input,
     # - a tensor of integer tag ids as targets.
     # To create the tag ids, use the `word_mapping` of `morpho.train.tags`.
     def extract_tagging_data(example):
-        raise NotImplementedError()
+        forms = example['forms']
+        tags = example['tags']
+        ids = morpho.train.tags.word_mapping(tags)
+        return forms, ids
 
     def create_dataset(name):
         dataset = getattr(morpho, name).dataset
