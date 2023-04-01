@@ -146,6 +146,7 @@ def bboxes_training(
       is >= iou_threshold, assign the object to the anchor.
     """
 
+
     anchor_classes = np.zeros(anchors.shape[0])
     anchor_bboxes = np.zeros(anchors.shape)
     ious = bboxes_iou(np.expand_dims(anchors, axis=1), np.expand_dims(gold_bboxes, axis=0))
