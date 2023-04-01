@@ -380,6 +380,7 @@ def main(args: argparse.Namespace) -> None:
         datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S"),
         ",".join(("{}={}".format(re.sub("(.)[^_]*_?", r"\1", k), v) for k, v in sorted(vars(args).items())))
     ))
+    os.makedirs(args.logdir, exist_ok=True)
 
     # Load and prepare the data
     svhn = SVHN()
@@ -389,6 +390,7 @@ def main(args: argparse.Namespace) -> None:
     if not args.test and not args.eval:
         train = am.prepare_data(svhn.train, training=True, shuffle=True)
         dev = am.prepare_data(svhn.dev, training=True)
+        am.save_anchors(args.logdir)
 
         # Create the model and train it
         model = RetinaNet(train_backbone=True)
