@@ -12,6 +12,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by d
 
 import numpy as np
 import tensorflow as tf
+from tensorflow import keras
+import keras_tuner as kt
 
 from morpho_analyzer import MorphoAnalyzer
 from morpho_dataset import MorphoDataset
@@ -21,7 +23,7 @@ from morpho_dataset import MorphoDataset
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed")
-parser.add_argument("--threads", default=12, type=int, help="Maximum number of threads to use")
+parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use")
 
 parser.add_argument("--test", default=False, action="store_true", help="Load model and only annotate test data")
 parser.add_argument("--eval", default=False, action="store_true", help="Load model and only annotate dev data")
@@ -30,12 +32,10 @@ parser.add_argument("--model", default="", type=str, help="Model path")
 # TODO: Subject to tuning
 parser.add_argument("--epochs", default=10, type=int, help="Number of epochs")
 parser.add_argument("--batch_size", default=64, type=int, help="Batch size")
-parser.add_argument("--cle_dim", default=32, type=int, help="CLE embedding dimension.")
+parser.add_argument("--tuner", default="Hyperband", choices=["Hyperband", "Bayes"], help="RNN layer type.")
 parser.add_argument("--rnn", default="LSTM", choices=["LSTM", "GRU"], help="RNN layer type.")
-parser.add_argument("--rnn_dim", default=64, type=int, help="RNN layer dimension.")
-parser.add_argument("--we_dim", default=64, type=int, help="Word embedding dimension.")
-parser.add_argument("--word_masking", default=0.2, type=float, help="Mask words with the given probability.")
 
+morpho = MorphoDataset("czech_pdt")
 
 class Model(tf.keras.Model):
     def __init__(self, args: argparse.Namespace, train: MorphoDataset.Dataset) -> None:
@@ -116,14 +116,27 @@ class Model(tf.keras.Model):
                      loss=ragged_sparse_categorical_crossentropy,
                      metrics=[tf.metrics.SparseCategoricalAccuracy(name="accuracy")])
 
-        self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
+        #self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
+
+
+def model_builder(hp):
+        args.cle_dim = hp.Choice('cle_dim', values=[16, 32, 64])
+        args.we_dim = hp.Choice('we_dim', values=[16, 32, 64])
+        args.rnn_dim = hp.Choice('rnn_dim', values=[32, 64, 128])
+        args.word_masking = hp.Choice('word_masking', values=[0.1, 0.2, 0.5])
+        if args.tuner == "Hyperband":
+            args.rnn = hp.Choice('rnn', values=["LSTM", "GRU"])
+
+        model = Model(args, morpho.train)
+
+        return model
 
 
 def main(args: argparse.Namespace) -> None:
     # Set the random seed and the number of threads.
     tf.keras.utils.set_random_seed(args.seed)
-    tf.config.threading.set_inter_op_parallelism_threads(args.threads)
-    tf.config.threading.set_intra_op_parallelism_threads(args.threads)
+    #tf.config.threading.set_inter_op_parallelism_threads(args.threads)
+    #tf.config.threading.set_intra_op_parallelism_threads(args.threads)
     if args.debug:
         tf.config.run_functions_eagerly(True)
         tf.data.experimental.enable_debug_mode()
@@ -136,7 +149,6 @@ def main(args: argparse.Namespace) -> None:
     ))
 
     # Load the data. Using analyses is only optional.
-    morpho = MorphoDataset("czech_pdt")
     analyses = MorphoAnalyzer("czech_pdt_analyses")
 
     # TODO: Consider utilising analysis outputs
@@ -158,12 +170,29 @@ def main(args: argparse.Namespace) -> None:
 
     # Training
     if not args.test and not args.eval:
-        model = Model(args, morpho.train)
-        def save_model(epoch, logs):
-            model.save(os.path.join(args.logdir, f"ep{epoch+1}.h5"), include_optimizer=False)
+        if args.tuner == "Hyperband":
+            tuner = kt.Hyperband(model_builder, 'val_accuracy', max_epochs=args.epochs, project_name="hyperband")
+        else:
+            tuner = kt.BayesianOptimization(model_builder, 'val_accuracy', max_trials=50, project_name="bayes")
 
-        logs = model.fit(train, epochs=args.epochs, validation_data=dev,
-                         callbacks=[model.tb_callback, tf.keras.callbacks.LambdaCallback(on_epoch_end=save_model)])
+        tuner.search(train, epochs=args.epochs, validation_data=dev)
+
+        best_hps=tuner.get_best_hyperparameters(num_trials=1)[0]
+        print(best_hps)
+        model = tuner.hypermodel.build(best_hps)
+        history = model.fit(train, epochs=30, validation_data=dev)
+
+        val_acc_per_epoch = history.history['val_accuracy']
+        best_epoch = val_acc_per_epoch.index(max(val_acc_per_epoch)) + 1
+        print('Best epoch: %d' % (best_epoch,))
+
+        best_model = tuner.hypermodel.build(best_hps)
+        best_model.fit(train, epochs=best_epoch, validation_data=dev)
+
+        best_model.save('the_best_fkin_model.h5', include_optimizer=False)
+        eval_result = best_model.evaluate(dev)
+        print(eval_result)
+        
     else:
         model = Model(args, morpho.train)
         model.load_weights(args.model)
