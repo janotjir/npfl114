@@ -13,9 +13,9 @@ from common_voice_cs import CommonVoiceCs
 # TODO: Define reasonable defaults and optionally more parameters.
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=..., type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 
@@ -127,7 +127,10 @@ def main(args: argparse.Namespace) -> None:
             #   - split it to unicode characters by using `tf.strings.unicode_split`
             #   - then pass it through the `cvcs.letters_mapping` layer to map
             #     the unicode characters to ids
-            raise NotImplementedError()
+            mfccs = example["mfccs"]
+            chars = tf.strings.unicode_split(example["sentence"], "UTF-8")
+            ids = cvcs.letters_mapping(chars)
+            return mfccs, ids
 
         dataset = getattr(cvcs, name).map(prepare_example)
         dataset = dataset.shuffle(len(dataset), seed=args.seed) if name == "train" else dataset
