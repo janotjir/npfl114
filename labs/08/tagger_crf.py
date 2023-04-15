@@ -95,7 +95,9 @@ class Model(tf.keras.Model):
             gold_labels.row_lengths(),
             self._crf_weights
         )
+        tf.print("log_lh", log_lh)
         loss = tf.reduce_mean(-log_lh, axis=0)
+        tf.print("loss", loss)
         return loss
 
     def crf_decode(self, logits: tf.RaggedTensor) -> tf.RaggedTensor:

@@ -38,19 +38,23 @@ class Model(tf.keras.Model):
         words = tf.keras.layers.Input(shape=[None], dtype=tf.string, ragged=True)
 
         # TODO(tagger_crf): Map strings in `words` to indices by using the `word_mapping` of `train.forms`.
+        indices = train.forms.word_mapping(words)
 
         # TODO(tagger_crf): Embed input words with dimensionality `args.we_dim`. Note that the `word_mapping`
         # provides a `vocabulary_size()` call returning the number of unique words in the mapping.
+        w_embeddings = tf.keras.layers.Embedding(train.forms.word_mapping.vocabulary_size(), args.we_dim)(indices)
 
         # TODO(tagger_crf): Create the specified `args.rnn` RNN layer ("LSTM" or "GRU") with
         # dimension `args.rnn_dim`. The layer should produce an output for every
         # sequence element (so a 3D output). Then apply it in a bidirectional way on
         # the embedded words, **summing** the outputs of forward and backward RNNs.
+        layer = getattr(tf.keras.layers, args.rnn)(args.rnn_dim, return_sequences=True)
+        hidden = tf.keras.layers.Bidirectional(layer, "sum")(w_embeddings)
 
         # TODO(tagger_crf): Add a final classification layer into as many classes as there are unique
         # tags in the `word_mapping` of `train.tags`. Note that **no activation** should
         # be used, the CRF operations will take care of it.
-        predictions = ...
+        predictions = tf.keras.layers.Dense(train.tags.word_mapping.vocabulary_size(), activation=None)(hidden)
 
         # Check that the created predictions are a 3D tensor.
         assert predictions.shape.rank == 3
@@ -64,9 +68,46 @@ class Model(tf.keras.Model):
 
         # TODO(tagger_crf): Create `self._crf_weights`, a trainable zero-initialized tf.float32 matrix variable
         # of size [number of unique train tags, number of unique train tags], using `self.add_weight`.
-        self._crf_weights = self.add_weight(...)
+        self._crf_weights = self.add_weight(
+            shape=[train.tags.word_mapping.vocabulary_size(), train.tags.word_mapping.vocabulary_size()],
+            dtype=tf.float32,
+            trainable=True,
+            initializer=tf.zeros
+        )
 
         self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
+
+    class CRFCell(tf.keras.layers.AbstractRNNCell):
+        def __init__(self, state_dim, model):
+            self.state_dim = state_dim
+            self.first_step = True
+            self.model = model
+            super().__init__()
+
+        @property
+        def state_size(self):
+            return self.state_dim
+
+        def call(self, inputs, states):
+            states = states[0]
+
+            #if self.first_step:
+            if tf.math.count_nonzero(states) < 1:
+                #tf.print("yes")
+                self.first_step = False
+                return (inputs, (inputs))
+            else:
+                #tf.print("no")
+
+                new_states = []
+                for k in range(self.state_size):
+                    # generate idxs (j, k) where j is in range(self.state_size)
+                    idxs = tf.concat([tf.expand_dims(tf.range(self.state_size), axis=-1), tf.expand_dims(tf.ones(self.state_size, dtype=tf.int32)*k, axis=-1)], axis=-1)
+                    # calculate alpha_t(k)
+                    new_states.append(inputs[:, k:k+1] + tf.math.reduce_logsumexp(states + tf.gather_nd(self.model._crf_weights, idxs)))
+                new_states = tf.concat(new_states, axis=1)
+
+                return (new_states, (new_states))
 
     def crf_loss(self, gold_labels: tf.RaggedTensor, logits: tf.RaggedTensor) -> tf.Tensor:
         assert isinstance(gold_labels, tf.RaggedTensor), "Gold labels given to CRF loss must be RaggedTensors"
@@ -102,18 +143,57 @@ class Model(tf.keras.Model):
         # - To index a (possibly ragged) tensor with another (possibly ragged) tensor,
         #   `tf.gather` and `tf.gather_nd` can be used. It is useful to pay attention
         #   to the `batch_dims` argument of these calls.
-        raise NotImplementedError()
+        cell = self.CRFCell(logits.shape[-1], self)
+        cell.first_step = True
+        layer = tf.keras.layers.RNN(cell)
+        alphas = layer(logits)
+        
+        # logsumexp_{over k} alpha_t(k)
+        alpha_loss = tf.math.reduce_logsumexp(alphas, axis=-1)
+        tf.print("alpha_loss", alpha_loss)
+        '''alpha_loss2 = []
+        for i in range(args.batch_size):
+            alpha_loss2.append(tf.math.reduce_logsumexp(alphas[i, :gold_labels.row_lengths()[i]], axis=-1))
+        tf.print("alpha_loss2", alpha_loss2)'''
+
+        # sum_{t=1}^N f(y_t = g_t | X;theta)
+        f_loss = tf.math.reduce_sum(logits * tf.one_hot(gold_labels, logits.shape[-1]), axis=[1,2])
+        tf.print("f_loss", f_loss)
+        '''f_loss2 = []
+        tmp = logits * tf.one_hot(gold_labels, logits.shape[-1])
+        for i in range(args.batch_size):
+            f_loss2.append(tf.math.reduce_sum(tmp[i, :gold_labels.row_lengths()[i], :]))
+        tf.print("f_loss2", f_loss2)'''
+        
+        # sum_{t=2}^N A_{g_{t-1}, g_t}
+        idxs = tf.concat([tf.expand_dims(gold_labels[:,:-1], axis=-1), tf.expand_dims(gold_labels[:,1:], axis=-1)], axis=-1)
+        A_loss = tf.gather_nd(self._crf_weights, idxs)
+        A_loss = tf.math.reduce_sum(A_loss, axis=-1)
+        tf.print("A_loss", A_loss)
+
+        # combine 
+        log_lh = f_loss + A_loss - alpha_loss
+        tf.print("log_lh", log_lh)
+        loss = tf.math.reduce_mean(-log_lh, axis=0)
+        return loss
 
     def crf_decode(self, logits: tf.RaggedTensor) -> tf.RaggedTensor:
         assert isinstance(logits, tf.RaggedTensor), "Logits given to CRF decoding must be RaggedTensors"
 
-        # TODO(tagger_crf): Perform CRF decoding using `tfa.text.crf_decode`. Convert the
+        # TODO: Perform CRF decoding using `tfa.text.crf_decode`. Convert the
         # logits analogously as in `crf_loss`. Finally, convert the result
         # to a ragged tensor.
-        predictions = ...
+        predictions, best_score = tfa.text.crf_decode(
+            logits.to_tensor(),
+            self._crf_weights,
+            logits.row_lengths()
+        )
+
+        predictions = tf.RaggedTensor.from_tensor(predictions, logits.row_lengths())
 
         assert isinstance(predictions, tf.RaggedTensor)
         return predictions
+
 
     # We override the `train_step` method, because we do not want to
     # evaluate the training data for performance reasons
@@ -184,7 +264,7 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     tf.config.threading.set_intra_op_parallelism_threads(args.threads)
     if args.debug:
         tf.config.run_functions_eagerly(True)
-        # tf.data.experimental.enable_debug_mode()
+        tf.data.experimental.enable_debug_mode()
 
     # Create logdir name
     args.logdir = os.path.join("logs", "{}-{}-{}".format(
@@ -204,7 +284,10 @@ def main(args: argparse.Namespace) -> Dict[str, float]:
     # - a tensor of integer tag ids as targets.
     # To create the tag ids, use the `word_mapping` of `morpho.train.tags`.
     def extract_tagging_data(example):
-        raise NotImplementedError()
+        forms = example['forms']
+        tags = example['tags']
+        ids = morpho.train.tags.word_mapping(tags)
+        return forms, ids
 
     def create_dataset(name):
         dataset = getattr(morpho, name).dataset
