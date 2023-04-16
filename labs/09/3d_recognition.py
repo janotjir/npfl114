@@ -10,6 +10,10 @@ import tensorflow as tf
 
 from modelnet import ModelNet
 
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 # TODO: Define reasonable defaults and optionally more parameters.
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
