@@ -80,7 +80,6 @@ class Model(tf.keras.Model):
     class CRFCell(tf.keras.layers.AbstractRNNCell):
         def __init__(self, state_dim, model):
             self.state_dim = state_dim
-            self.first_step = True
             self.model = model
             super().__init__()
 
@@ -91,23 +90,18 @@ class Model(tf.keras.Model):
         def call(self, inputs, states):
             states = states[0]
 
-            #if self.first_step:
-            if tf.math.count_nonzero(states) < 1:
-                #tf.print("yes")
-                self.first_step = False
-                return (inputs, (inputs))
-            else:
-                #tf.print("no")
+            '''new_states = []
+            for k in range(self.state_size):
+                # generate idxs (j, k) where j is in range(self.state_size)
+                idxs = tf.concat([tf.expand_dims(tf.range(self.state_size), axis=-1), tf.expand_dims(tf.ones(self.state_size, dtype=tf.int32)*k, axis=-1)], axis=-1)
+                # calculate alpha_t(k)
+                new_states.append(tf.squeeze(inputs[:, k:k+1]) + tf.math.reduce_logsumexp(states + tf.gather_nd(self.model._crf_weights, idxs), axis=-1))
 
-                new_states = []
-                for k in range(self.state_size):
-                    # generate idxs (j, k) where j is in range(self.state_size)
-                    idxs = tf.concat([tf.expand_dims(tf.range(self.state_size), axis=-1), tf.expand_dims(tf.ones(self.state_size, dtype=tf.int32)*k, axis=-1)], axis=-1)
-                    # calculate alpha_t(k)
-                    new_states.append(inputs[:, k:k+1] + tf.math.reduce_logsumexp(states + tf.gather_nd(self.model._crf_weights, idxs)))
-                new_states = tf.concat(new_states, axis=1)
+            new_states = tf.transpose(new_states, perm=[1, 0])'''
 
-                return (new_states, (new_states))
+            new_states = inputs + tf.reduce_logsumexp(self.model._crf_weights + states[:, :, tf.newaxis], axis = 1)
+
+            return (new_states, (new_states))
 
     def crf_loss(self, gold_labels: tf.RaggedTensor, logits: tf.RaggedTensor) -> tf.Tensor:
         assert isinstance(gold_labels, tf.RaggedTensor), "Gold labels given to CRF loss must be RaggedTensors"
@@ -143,37 +137,27 @@ class Model(tf.keras.Model):
         # - To index a (possibly ragged) tensor with another (possibly ragged) tensor,
         #   `tf.gather` and `tf.gather_nd` can be used. It is useful to pay attention
         #   to the `batch_dims` argument of these calls.
-        cell = self.CRFCell(logits.shape[-1], self)
-        cell.first_step = True
-        layer = tf.keras.layers.RNN(cell)
-        alphas = layer(logits)
+
+        layer = tf.keras.layers.RNN(self.CRFCell(logits.shape[-1], self), trainable=False)
+        alphas = layer(logits[:,1:,:], initial_state=tf.squeeze(logits[:,:1,:], axis=1))
         
         # logsumexp_{over k} alpha_t(k)
         alpha_loss = tf.math.reduce_logsumexp(alphas, axis=-1)
-        tf.print("alpha_loss", alpha_loss)
-        '''alpha_loss2 = []
-        for i in range(args.batch_size):
-            alpha_loss2.append(tf.math.reduce_logsumexp(alphas[i, :gold_labels.row_lengths()[i]], axis=-1))
-        tf.print("alpha_loss2", alpha_loss2)'''
+        #tf.print("alpha_loss", alpha_loss)
 
         # sum_{t=1}^N f(y_t = g_t | X;theta)
         f_loss = tf.math.reduce_sum(logits * tf.one_hot(gold_labels, logits.shape[-1]), axis=[1,2])
-        tf.print("f_loss", f_loss)
-        '''f_loss2 = []
-        tmp = logits * tf.one_hot(gold_labels, logits.shape[-1])
-        for i in range(args.batch_size):
-            f_loss2.append(tf.math.reduce_sum(tmp[i, :gold_labels.row_lengths()[i], :]))
-        tf.print("f_loss2", f_loss2)'''
+        #tf.print("f_loss", f_loss)
         
         # sum_{t=2}^N A_{g_{t-1}, g_t}
         idxs = tf.concat([tf.expand_dims(gold_labels[:,:-1], axis=-1), tf.expand_dims(gold_labels[:,1:], axis=-1)], axis=-1)
         A_loss = tf.gather_nd(self._crf_weights, idxs)
         A_loss = tf.math.reduce_sum(A_loss, axis=-1)
-        tf.print("A_loss", A_loss)
+        #tf.print("A_loss", A_loss)
 
         # combine 
         log_lh = f_loss + A_loss - alpha_loss
-        tf.print("log_lh", log_lh)
+        #tf.print("log_lh", log_lh)
         loss = tf.math.reduce_mean(-log_lh, axis=0)
         return loss
 
