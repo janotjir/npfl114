@@ -30,7 +30,6 @@ parser.add_argument("--anotate", default=True, action="store_true", help="Anotat
 
 parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
 parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")
-parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 parser.add_argument("--beam_width", default=20, type=int, help="Beam width of the beam search decoder")  # Higher value leads to better results but slower evaluation
 
 
@@ -48,23 +47,24 @@ class Model(tf.keras.Model):
         #   outputs (the plus one is for the CTC blank symbol). Note that no
         #   activation should be used (the CTC operations will take care of it).
 
-        layer = tf.keras.layers.LSTM(1028, return_sequences=True)
+        layer = tf.keras.layers.LSTM(1024, return_sequences=True)
         hidden = tf.keras.layers.Bidirectional(layer, "sum")(inputs.to_tensor())
-
-        layer = tf.keras.layers.LSTM(1028, return_sequences=True)
-        hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden)
-
-        layer = tf.keras.layers.LSTM(1028, return_sequences=True)
-        hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden)
         hidden = tf.RaggedTensor.from_tensor(hidden, inputs.row_lengths())
 
-        hidden = tf.keras.layers.Dense(256)(hidden)
-        logits = tf.keras.layers.Dense(len(CommonVoiceCs.LETTERS)+1, activation=None)(hidden)
+        layer = tf.keras.layers.LSTM(1024, return_sequences=True)
+        hidden2 = tf.keras.layers.Bidirectional(layer, "sum")(hidden.to_tensor())
+        hidden2 = tf.RaggedTensor.from_tensor(hidden2, hidden.row_lengths())
+
+        layer = tf.keras.layers.LSTM(1024, return_sequences=True)
+        hidden3 = tf.keras.layers.Bidirectional(layer, "sum")(hidden2.to_tensor())
+        hidden3 = tf.RaggedTensor.from_tensor(hidden3, hidden2.row_lengths())
+
+        logits = tf.keras.layers.Dense(len(CommonVoiceCs.LETTERS)+1, activation=None)(hidden3)
 
         super().__init__(inputs=inputs, outputs=logits)
 
         # We compile the model with the CTC loss and EditDistance metric.
-        self.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=args.learning_rate, jit_compile=False),
+        self.compile(optimizer=tf.keras.optimizers.Adam(jit_compile=False, learning_rate=0.0001),
                      loss=self.ctc_loss,
                      metrics=[CommonVoiceCs.EditDistanceMetric()])
 
@@ -146,12 +146,13 @@ def main(args: argparse.Namespace) -> None:
     tf.config.threading.set_intra_op_parallelism_threads(args.threads)
     if args.debug:
         tf.config.run_functions_eagerly(True)
-        # tf.data.experimental.enable_debug_mode()
+        tf.data.experimental.enable_debug_mode()
 
     # Create logdir name
-    args.logdir = os.path.join("logs", "{}-{}".format(
+    args.logdir = os.path.join("logs", "{}-{}-{}".format(
         os.path.basename(globals().get("__file__", "notebook")),
-        datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S"),
+        ",".join(("{}={}".format(re.sub("(.)[^_]*_?", r"\1", k), v) for k, v in sorted(vars(args).items())))
     ))
 
     # Load the data.
