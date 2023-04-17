@@ -30,24 +30,33 @@ parser.add_argument("--model", default="", type=str, help="Model path")
 
 
 class CNN3D(tf.keras.Model):
-    def __init__(self, args, num_steps=None, k=2):
+    def __init__(self, args, num_steps=None, k=2, N=1, mega_skip=False):
         inputs = tf.keras.layers.Input(shape=[args.modelnet, args.modelnet, args.modelnet, ModelNet.C], dtype=tf.float32)
 
-        hidden = tf.keras.layers.Conv3D(16, kernel_size=3, padding='same', activation=None, use_bias=False)(inputs)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.Activation('relu')(hidden)
+        _hidden = tf.keras.layers.Conv3D(16, kernel_size=3, padding='same', activation=None, use_bias=False)(inputs)
+        _hidden = tf.keras.layers.BatchNormalization()(_hidden)
+        _hidden = tf.keras.layers.Activation('relu')(_hidden)
 
-        hidden = self._block(hidden, 16*k, stride=1)
-        hidden = self._identity_block(hidden, 16*k)
-        #hidden = self._identity_block(hidden, 16*k)
+        hidden = self._block(_hidden, 16*k, stride=1)
+        for i in range(N):
+            hidden = self._identity_block(hidden, 16*k)
 
         hidden = self._block(hidden, 32*k, stride=2)
-        hidden = self._identity_block(hidden, 32*k)
-        #hidden = self._identity_block(hidden, 32*k)
+        for i in range(N):
+            hidden = self._identity_block(hidden, 32*k)
 
         hidden = self._block(hidden, 64*k, stride=2)
-        hidden = self._identity_block(hidden, 64*k)
-        #hidden = self._identity_block(hidden, 64*k)
+        for i in range(N):
+            hidden = self._identity_block(hidden, 64*k)
+
+        if mega_skip:
+            size = args.modelnet//4
+            _hidden = tf.keras.layers.AveragePooling3D((size, size, size), strides=4, padding='same')(_hidden)
+            _hidden = tf.keras.layers.Conv2D(64*k, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(_hidden)
+            _hidden = tf.keras.layers.BatchNormalization()(_hidden)
+
+            hidden = tf.keras.layers.add([hidden, _hidden])
+            hidden = tf.keras.layers.Activation('relu')(hidden)
 
         hidden = tf.keras.layers.Lambda(lambda z: tf.keras.backend.mean(z, [1, 2, 3]), name='reduce_mean')(hidden)
         outputs = tf.keras.layers.Dense(len(ModelNet.LABELS), activation=tf.nn.softmax)(hidden)
@@ -55,7 +64,7 @@ class CNN3D(tf.keras.Model):
         super().__init__(inputs=inputs, outputs=outputs)
 
         if num_steps is not None:
-            lr = tf.keras.optimizers.schedules.CosineDecay(1e-3, num_steps * args.epochs, alpha=1e-6)
+            lr = tf.keras.optimizers.schedules.CosineDecay(1e-4, num_steps * args.epochs, alpha=1e-6)
         else:
             lr = 1e-3
         self.compile(
@@ -93,10 +102,6 @@ class CNN3D(tf.keras.Model):
         x = tf.keras.layers.Activation('relu')(x)
 
         return x
-
-
-# weights for classes: [0.17449664 0.08724832 0.08724832 0.10067114 0.10067114 0.08724832 0.10067114 0.08724832 0.08724832 0.08724832]
-# not used, imbalance is not that bad
 
 
 def main(args: argparse.Namespace) -> None:
