@@ -25,26 +25,47 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--test", default=False, action="store_true", help="Load model and only annotate test data")
 parser.add_argument("--model", default="", type=str, help="Model path")
 
-parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
-parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")
+parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
+parser.add_argument("--batch_size", default=128, type=int, help="Batch size.")
 parser.add_argument("--beam_width", default=20, type=int, help="Beam width of the beam search decoder")
+parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate")
 
 
 class Model(tf.keras.Model):
     def __init__(self, args: argparse.Namespace) -> None:
-        inputs = tf.keras.layers.Input(shape=[None, None, 1], dtype=tf.float32, ragged=True)
+        inputs = tf.keras.layers.Input(shape=[120, None, 1], dtype=tf.float32, ragged=True)
 
         # TODO: Add CNN feature extraction and adjust RNN structure
 
-        hidden = tf.squeeze(inputs, -1)
+        hidden = inputs.to_tensor()
+        hidden = tf.transpose(hidden, [0, 2, 1, 3])
+        print(hidden.shape)
 
-        layer = tf.keras.layers.LSTM(128, return_sequences=True)
-        hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden.to_tensor())
+        hidden = tf.keras.layers.Conv2D(8, 5, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(8, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(8, 3, (2, 2), padding='same')(hidden)
+
+        hidden = tf.keras.layers.Conv2D(16, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(16, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(16, 3, (4, 4), padding='same')(hidden)
+
+        hidden = tf.keras.layers.Conv2D(32, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(32, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(32, 3, (4, 4), padding='same')(hidden)
+
+        #hidden = tf.RaggedTensor.from_tensor(hidden, inputs.row_lengths(1))
+        print(hidden.shape)
+        #hidden = tf.concat(tf.split(hidden, tf.shape(hidden)[2], 2), 1)
+        hidden = tf.reshape(hidden, [tf.shape(hidden)[0], tf.shape(hidden)[1], tf.shape(hidden)[2] * tf.shape(hidden)[3]])
+        print(hidden.shape)
+
+        layer = tf.keras.layers.LSTM(32, return_sequences=True)
+        hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden)
 
         #layer = tf.keras.layers.LSTM(1024, return_sequences=True)
         #hidden += tf.keras.layers.Bidirectional(layer, "sum")(hidden)
 
-        layer = tf.keras.layers.LSTM(128, return_sequences=True)
+        layer = tf.keras.layers.LSTM(32, return_sequences=True)
         hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden)
         hidden = tf.RaggedTensor.from_tensor(hidden, inputs.row_lengths())
 
@@ -147,8 +168,8 @@ def main(args: argparse.Namespace) -> None:
     # a single channel of `tf.uint8`s in [0-255] range.
     homr = HOMRDataset()
 
-    for example in homr.dev:
-        print(example['image'].shape)
+    #for example in homr.dev:
+    #    print(example['image'].shape)
 
     def create_dataset(name):
         def prepare_example(example):
@@ -159,6 +180,7 @@ def main(args: argparse.Namespace) -> None:
             #   - then pass it through the `cvcs.letters_mapping` layer to map
             #     the unicode characters to ids
             img = tf.image.convert_image_dtype(example["image"], tf.float32)
+            img = tf.image.resize(img, [120, 3000], preserve_aspect_ratio=True)
             ids = example["marks"]
             return img, ids
 
