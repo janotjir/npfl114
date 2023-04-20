@@ -10,7 +10,6 @@ import numpy as np
 import tensorflow as tf
 
 from homr_dataset import HOMRDataset
-import cv2
 
 # Team members:
 # 4c2c10df-00be-4008-8e01-1526b9225726
@@ -32,34 +31,44 @@ parser.add_argument("--beam_width", default=20, type=int, help="Beam width of th
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate")
 
 
-HEIGHT = 128
-WIDTH = 1024
-
-
 class Model(tf.keras.Model):
     def __init__(self, args: argparse.Namespace) -> None:
-        inputs = tf.keras.layers.Input(shape=[HEIGHT, WIDTH, 1], dtype=tf.float32)
+        inputs = tf.keras.layers.Input(shape=[120, None, 1], dtype=tf.float32, ragged=True)
 
         # TODO: Add CNN feature extraction and adjust RNN structure
 
-        # CNN for feature extraction and implicit sequence ROIs creation
-        hidden = self._res_block(inputs, 16, kernels=(3,3), stride=(2,2))
-        hidden = self._res_block(hidden, 32, kernels=(3,4), stride=(4,2))
-        hidden = self._res_block(hidden, 64, kernels=(3,4), stride=(4,2))
-        hidden = self._res_block(hidden, 64, kernels=(3,4), stride=(4,2))
+        hidden = inputs.to_tensor()
+        hidden = tf.transpose(hidden, [0, 2, 1, 3])
+        print(hidden.shape)
 
-        # hidden = tf.transpose(hidden, [0, 2, 1, 3])
-        hidden = tf.squeeze(hidden, axis=1)
+        hidden = tf.keras.layers.Conv2D(8, 5, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(8, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(8, 3, (2, 2), padding='same')(hidden)
 
-        # RNN for sequence processing
+        hidden = tf.keras.layers.Conv2D(16, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(16, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(16, 3, (4, 4), padding='same')(hidden)
+
+        hidden = tf.keras.layers.Conv2D(32, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(32, 3, padding='same')(hidden)
+        hidden = tf.keras.layers.Conv2D(32, 3, (4, 4), padding='same')(hidden)
+
+        #hidden = tf.RaggedTensor.from_tensor(hidden, inputs.row_lengths(1))
+        print(hidden.shape)
+        #hidden = tf.concat(tf.split(hidden, tf.shape(hidden)[2], 2), 1)
+        hidden = tf.reshape(hidden, [tf.shape(hidden)[0], tf.shape(hidden)[1], tf.shape(hidden)[2] * tf.shape(hidden)[3]])
+        print(hidden.shape)
+
         layer = tf.keras.layers.LSTM(32, return_sequences=True)
         hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden)
 
+        #layer = tf.keras.layers.LSTM(1024, return_sequences=True)
+        #hidden += tf.keras.layers.Bidirectional(layer, "sum")(hidden)
+
         layer = tf.keras.layers.LSTM(32, return_sequences=True)
-        hidden += tf.keras.layers.Bidirectional(layer, "sum")(hidden)
-        
-        # final dense layer
-        hidden = tf.RaggedTensor.from_tensor(hidden, padding=None)
+        hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden)
+        hidden = tf.RaggedTensor.from_tensor(hidden, inputs.row_lengths())
+
         logits = tf.keras.layers.Dense(len(HOMRDataset.MARKS)+1, activation=None)(hidden)
 
         super().__init__(inputs=inputs, outputs=logits)
@@ -71,23 +80,6 @@ class Model(tf.keras.Model):
 
         self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
         self.beam_width = args.beam_width
-
-    def _res_block(self, input, filters, kernels=(3,3), stride=(2,2)):
-        hidden = tf.keras.layers.Conv2D(filters, kernels[0], padding='same', activation=None, use_bias=False)(input)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.Activation('relu')(hidden)
-
-        hidden = tf.keras.layers.Conv2D(filters, kernels[1], strides=stride, padding='same', activation=None, use_bias=False)(hidden)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-
-        input = tf.keras.layers.AveragePooling2D(stride, strides=stride, padding='same')(input)
-        input = tf.keras.layers.Conv2D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
-        input = tf.keras.layers.BatchNormalization()(input)
-
-        hidden = tf.keras.layers.add([hidden, input])
-        hidden = tf.keras.layers.Activation('relu')(hidden)
-
-        return hidden
 
     def ctc_loss(self, gold_labels: tf.RaggedTensor, logits: tf.RaggedTensor) -> tf.Tensor:
         assert isinstance(gold_labels, tf.RaggedTensor), "Gold labels given to CTC loss must be RaggedTensors"
@@ -164,7 +156,7 @@ def main(args: argparse.Namespace) -> None:
     tf.config.threading.set_intra_op_parallelism_threads(args.threads)
     if args.debug:
         tf.config.run_functions_eagerly(True)
-        tf.data.experimental.enable_debug_mode()
+        # tf.data.experimental.enable_debug_mode()
 
     # Create logdir name
     args.logdir = os.path.join("logs", "{}-{}".format(
@@ -176,18 +168,8 @@ def main(args: argparse.Namespace) -> None:
     # a single channel of `tf.uint8`s in [0-255] range.
     homr = HOMRDataset()
 
-    os.makedirs("homr_visual_samples", exist_ok=True)
-    for i, example in enumerate(homr.dev):
-        img = tf.image.convert_image_dtype(example["image"], tf.float32)
-        img = tf.image.resize_with_pad(img, HEIGHT, WIDTH)
-        img = img.numpy()
-        print(img.shape)
-        for j in range(0, img.shape[1], 16):
-            img = cv2.line(img, (j, 0), (j, HEIGHT), (0,0,255), 1)
-        cv2.imwrite("homr_visual_samples/"+str(i)+".jpg", img*255)
-        if i >= 10:
-            break
-    exit()
+    #for example in homr.dev:
+    #    print(example['image'].shape)
 
     def create_dataset(name):
         def prepare_example(example):
@@ -198,8 +180,7 @@ def main(args: argparse.Namespace) -> None:
             #   - then pass it through the `cvcs.letters_mapping` layer to map
             #     the unicode characters to ids
             img = tf.image.convert_image_dtype(example["image"], tf.float32)
-            #img = tf.image.resize(img, [120, 3000], preserve_aspect_ratio=True)
-            img = tf.image.resize_with_pad(img, HEIGHT, WIDTH)
+            img = tf.image.resize(img, [120, 3000], preserve_aspect_ratio=True)
             ids = example["marks"]
             return img, ids
 
@@ -208,7 +189,6 @@ def main(args: argparse.Namespace) -> None:
         dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
-    
     train, dev, test = create_dataset("train"), create_dataset("dev"), create_dataset("test")
 
     # TODO: Create the model and train it
