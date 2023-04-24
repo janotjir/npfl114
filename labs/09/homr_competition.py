@@ -27,7 +27,7 @@ parser.add_argument("--test", default=False, action="store_true", help="Load mod
 parser.add_argument("--model", default="", type=str, help="Model path")
 
 parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
-parser.add_argument("--batch_size", default=128, type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
 parser.add_argument("--beam_width", default=20, type=int, help="Beam width of the beam search decoder")
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate")
 
@@ -43,19 +43,24 @@ class Model(tf.keras.Model):
         # TODO: Add CNN feature extraction and adjust RNN structure
 
         # CNN for feature extraction and implicit sequence ROIs creation
-        hidden = self._res_block(inputs, 16, kernels=(3,3), stride=(2,2))
+        hidden = tf.keras.layers.Conv2D(16, kernel_size=3, padding='same', activation=None, use_bias=False)(inputs)
+        hidden = tf.keras.layers.BatchNormalization()(hidden)
+        hidden = tf.keras.layers.Activation('relu')(hidden)
+
+        hidden = self._res_block(hidden, 16, kernels=(3,3), stride=(2,2), residual=False)
         hidden = self._res_block(hidden, 32, kernels=(3,4), stride=(4,2))
         hidden = self._res_block(hidden, 64, kernels=(3,4), stride=(4,2))
-        hidden = self._res_block(hidden, 64, kernels=(3,4), stride=(4,2))
+        hidden = self._res_block(hidden, 128, kernels=(3,4), stride=(4,2))
 
         # hidden = tf.transpose(hidden, [0, 2, 1, 3])
+        # hidden = tf.reshape(hidden, [tf.shape(hidden)[0], tf.shape(hidden)[1], tf.shape(hidden)[2] * tf.shape(hidden)[3]])
         hidden = tf.squeeze(hidden, axis=1)
 
         # RNN for sequence processing
-        layer = tf.keras.layers.LSTM(32, return_sequences=True)
+        layer = tf.keras.layers.LSTM(128, return_sequences=True)
         hidden = tf.keras.layers.Bidirectional(layer, "sum")(hidden)
 
-        layer = tf.keras.layers.LSTM(32, return_sequences=True)
+        layer = tf.keras.layers.LSTM(128, return_sequences=True)
         hidden += tf.keras.layers.Bidirectional(layer, "sum")(hidden)
         
         # final dense layer
@@ -72,7 +77,7 @@ class Model(tf.keras.Model):
         self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
         self.beam_width = args.beam_width
 
-    def _res_block(self, input, filters, kernels=(3,3), stride=(2,2)):
+    def _res_block(self, input, filters, kernels=(3,3), stride=(2,2), residual=True):
         hidden = tf.keras.layers.Conv2D(filters, kernels[0], padding='same', activation=None, use_bias=False)(input)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
         hidden = tf.keras.layers.Activation('relu')(hidden)
@@ -80,11 +85,12 @@ class Model(tf.keras.Model):
         hidden = tf.keras.layers.Conv2D(filters, kernels[1], strides=stride, padding='same', activation=None, use_bias=False)(hidden)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
 
-        input = tf.keras.layers.AveragePooling2D(stride, strides=stride, padding='same')(input)
-        input = tf.keras.layers.Conv2D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
-        input = tf.keras.layers.BatchNormalization()(input)
+        if residual:
+            input = tf.keras.layers.AveragePooling2D(stride, strides=stride, padding='same')(input)
+            input = tf.keras.layers.Conv2D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
+            input = tf.keras.layers.BatchNormalization()(input)
+            hidden = tf.keras.layers.add([hidden, input])
 
-        hidden = tf.keras.layers.add([hidden, input])
         hidden = tf.keras.layers.Activation('relu')(hidden)
 
         return hidden
@@ -176,7 +182,7 @@ def main(args: argparse.Namespace) -> None:
     # a single channel of `tf.uint8`s in [0-255] range.
     homr = HOMRDataset()
 
-    os.makedirs("homr_visual_samples", exist_ok=True)
+    '''os.makedirs("homr_visual_samples", exist_ok=True)
     for i, example in enumerate(homr.dev):
         img = tf.image.convert_image_dtype(example["image"], tf.float32)
         img = tf.image.resize_with_pad(img, HEIGHT, WIDTH)
@@ -187,7 +193,7 @@ def main(args: argparse.Namespace) -> None:
         cv2.imwrite("homr_visual_samples/"+str(i)+".jpg", img*255)
         if i >= 10:
             break
-    exit()
+    exit()'''
 
     def create_dataset(name):
         def prepare_example(example):
@@ -223,7 +229,7 @@ def main(args: argparse.Namespace) -> None:
         def save_model(epoch, logs):
             model.save(os.path.join(args.logdir, f"ep{epoch+1}.h5"), include_optimizer=False)
 
-        logs = model.fit(train, epochs=args.epochs, validation_data=dev,
+        logs = model.fit(train, epochs=args.epochs, validation_data=dev, verbose=2,
                             callbacks=[model.tb_callback, tf.keras.callbacks.LambdaCallback(on_epoch_end=save_model)])
     
     else:

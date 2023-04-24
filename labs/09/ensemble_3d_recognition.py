@@ -28,15 +28,27 @@ parser.add_argument("--test", default=False, action="store_true", help="Run mode
 # dc535248-fa6c-4987-b49f-25b6ede7c87d
 
 
+def scce_with_labelsmooth(y, y_hat):
+    y = tf.squeeze(tf.one_hot(tf.cast(y, tf.int32), len(ModelNet.LABELS)), axis=-2)
+    return tf.keras.losses.categorical_crossentropy(y, y_hat, label_smoothing=0.2)
+
+
 class CNN3D(tf.keras.Model):
-    def __init__(self, args, num_steps=None, k=2, N=1, mega_skip=False, modelnet=20):
+    def __init__(self, args, num_steps=None, k=2, N=1, mega_skip=False, pool_beginning=False, modelnet=32):
         inputs = tf.keras.layers.Input(shape=[modelnet, modelnet, modelnet, ModelNet.C], dtype=tf.float32)
 
-        _hidden = tf.keras.layers.Conv3D(16, kernel_size=3, padding='same', activation=None, use_bias=False)(inputs)
+        _hidden = tf.keras.layers.Conv3D(16*k, kernel_size=3, padding='same', activation=None, use_bias=False)(inputs)
         _hidden = tf.keras.layers.BatchNormalization()(_hidden)
         _hidden = tf.keras.layers.Activation('relu')(_hidden)
 
-        hidden = self._block(_hidden, 16*k, stride=1)
+        _hidden = tf.keras.layers.Conv3D(16*k, kernel_size=3, padding='same', activation=None, use_bias=False)(_hidden)
+        _hidden = tf.keras.layers.BatchNormalization()(_hidden)
+        _hidden = tf.keras.layers.Activation('relu')(_hidden)
+
+        if pool_beginning:
+            hidden = self._block(_hidden, 16*k, stride=2)
+        else:
+            hidden = self._block(_hidden, 16*k, stride=1)
         for i in range(N):
             hidden = self._identity_block(hidden, 16*k)
 
@@ -49,9 +61,9 @@ class CNN3D(tf.keras.Model):
             hidden = self._identity_block(hidden, 64*k)
 
         if mega_skip:
-            size = modelnet//4
+            size = args.modelnet//4
             _hidden = tf.keras.layers.AveragePooling3D((size, size, size), strides=4, padding='same')(_hidden)
-            _hidden = tf.keras.layers.Conv2D(64*k, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(_hidden)
+            _hidden = tf.keras.layers.Conv3D(64*k, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(_hidden)
             _hidden = tf.keras.layers.BatchNormalization()(_hidden)
 
             hidden = tf.keras.layers.add([hidden, _hidden])
@@ -65,10 +77,11 @@ class CNN3D(tf.keras.Model):
         if num_steps is not None:
             lr = tf.keras.optimizers.schedules.CosineDecay(1e-4, num_steps * args.epochs, alpha=1e-6)
         else:
-            lr = 1e-3
+            lr = 1e-4
         self.compile(
             optimizer=tf.optimizers.experimental.AdamW(clipnorm=1.0, learning_rate=lr, jit_compile=False),
-            loss=tf.losses.SparseCategoricalCrossentropy(),
+            #loss=tf.losses.SparseCategoricalCrossentropy(),
+            loss=scce_with_labelsmooth,
             metrics=[tf.metrics.SparseCategoricalAccuracy(name="accuracy")],
         )
 
@@ -94,12 +107,93 @@ class CNN3D(tf.keras.Model):
         x = tf.keras.layers.BatchNormalization()(x)
 
         input = tf.keras.layers.AveragePooling3D((2, 2, 2), strides=stride, padding='same')(input)
-        input = tf.keras.layers.Conv2D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
+        input = tf.keras.layers.Conv3D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
         input = tf.keras.layers.BatchNormalization()(input)
 
         x = tf.keras.layers.add([x, input])
         x = tf.keras.layers.Activation('relu')(x)
 
+        return x
+
+
+class CNN3DPreActiv(tf.keras.Model):
+    def __init__(self, args, num_steps=None, k=2, N=1, mega_skip=False, pool_beginning=False, modelnet=32):
+        inputs = tf.keras.layers.Input(shape=[modelnet, modelnet, modelnet, ModelNet.C], dtype=tf.float32)
+
+        _hidden = tf.keras.layers.BatchNormalization()(inputs)
+        _hidden = tf.keras.layers.Activation('relu')(_hidden)
+        _hidden = tf.keras.layers.Conv3D(16*k, kernel_size=3, padding='same', activation=None, use_bias=False)(_hidden)
+
+        _hidden = tf.keras.layers.BatchNormalization()(_hidden)
+        _hidden = tf.keras.layers.Activation('relu')(_hidden)
+        _hidden = tf.keras.layers.Conv3D(16*k, kernel_size=3, padding='same', activation=None, use_bias=False)(_hidden)
+
+        if pool_beginning:
+            hidden = self._block(_hidden, 16*k, stride=2)
+        else:
+            hidden = self._block(_hidden, 16*k, stride=1)
+        for i in range(N):
+            hidden = self._identity_block(hidden, 16*k)
+
+        hidden = self._block(hidden, 32*k, stride=2)
+        for i in range(N):
+            hidden = self._identity_block(hidden, 32*k)
+
+        hidden = self._block(hidden, 64*k, stride=2)
+        for i in range(N):
+            hidden = self._identity_block(hidden, 64*k)
+
+        if mega_skip:
+            size = args.modelnet//4
+            _hidden = tf.keras.layers.AveragePooling3D((size, size, size), strides=4, padding='same')(_hidden)
+            _hidden = tf.keras.layers.Conv3D(64*k, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(_hidden)
+
+            hidden = tf.keras.layers.add([hidden, _hidden])
+
+        hidden = tf.keras.layers.Lambda(lambda z: tf.keras.backend.mean(z, [1, 2, 3]), name='reduce_mean')(hidden)
+        outputs = tf.keras.layers.Dense(len(ModelNet.LABELS), activation=tf.nn.softmax)(hidden)
+
+        super().__init__(inputs=inputs, outputs=outputs)
+
+        if num_steps is not None:
+            lr = tf.keras.optimizers.schedules.CosineDecay(1e-4, num_steps * args.epochs, alpha=1e-6)
+        else:
+            lr = 1e-5
+        self.compile(
+            optimizer=tf.optimizers.experimental.AdamW(clipnorm=1.0, learning_rate=lr, jit_compile=False),
+            #loss=tf.losses.SparseCategoricalCrossentropy(),
+            loss=scce_with_labelsmooth,
+            metrics=[tf.metrics.SparseCategoricalAccuracy(name="accuracy")],
+        )
+
+    def _identity_block(self, input, filters):
+        x = tf.keras.layers.BatchNormalization()(input)
+        x = tf.keras.layers.Activation('relu')(x)
+        x = tf.keras.layers.Conv3D(filters, kernel_size=3, padding='same', activation=None, use_bias=False)(x)
+    
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Activation('relu')(x)
+        x = tf.keras.layers.Conv3D(filters, kernel_size=3, padding='same', activation=None, use_bias=False)(x)
+
+        x = tf.keras.layers.add([x, input])
+        
+
+        return x
+
+    def _block(self, input, filters, stride=2):
+        x = tf.keras.layers.BatchNormalization()(input)
+        x = tf.keras.layers.Activation('relu')(x)
+        x = tf.keras.layers.Conv3D(filters, kernel_size=3, strides=1, padding='same', activation=None, use_bias=False)(x)
+
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Activation('relu')(x)
+        x = tf.keras.layers.Conv3D(filters, kernel_size=3, strides=stride, padding='same', activation=None, use_bias=False)(x)
+        
+        input = tf.keras.layers.AveragePooling3D((2, 2, 2), strides=stride, padding='same')(input)
+        input = tf.keras.layers.Conv3D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
+
+        x = tf.keras.layers.add([x, input])
+        
         return x
 
 
@@ -117,48 +211,46 @@ def main(args: argparse.Namespace) -> None:
     os.makedirs(args.logdir, exist_ok=True)
 
     '''
-    3d_recognition.py-2023-04-17_010614-bs=32,d=False,e=10,e=False,m=,m=20,s=42,t=False,t=1/ep8.h5 93.77 20 N=1 False
-    3d_recognition.py-2023-04-17_010850-bs=32,d=False,e=10,e=False,m=,m=20,s=42,t=False,t=1/ep9.h5 94.14 20 N=1 False
-    3d_recognition.py-2023-04-17_011124-bs=32,d=False,e=10,e=False,m=,m=20,s=42,t=False,t=1/ep10.h5 93.41 20 N=2 False
-    3d_recognition.py-2023-04-17_011525-bs=32,d=False,e=10,e=False,m=,m=32,s=42,t=False,t=1/ep7.h5 94.51 32 N=1 False
-    3d_recognition.py-2023-04-17_012337-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep14.h5 95.60 32 N=1 False
-    3d_recognition.py-2023-04-17_123755-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep18.h5 95.24 32 N=1 True
+    PreActiv
+    3d_recognition.py-2023-04-23_225129-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1_stride1_ls02/ep12.h5 94.87 N=1 False 
+    3d_recognition.py-2023-04-23_231055-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1_stride2_ls02/ep18.h5 94.87 N=1 False
+
+    3d_recognition.py-2023-04-23_232212-bs=32,d=False,e=20,e=False,m=logs_m^18_lr-4/ep1.h5 94.87 ^same
+    3d_recognition.py-2023-04-23_232330-bs=32,d=False,e=20,e=False,m=logs_m^^18_lr-5/ep4.h5 95.24 ^same
+
+    Normal
+    3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep12.h5 95.60 N=1 False
+    3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep16.h5 96.34 N=1 False
+    3d_recognition.py-2023-04-23_235644-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep20.h5 94.87 N=1 False stride=2
     '''
 
-    # 94.87
-    '''model_paths = ["logs/3d_recognition.py-2023-04-17_010614-bs=32,d=False,e=10,e=False,m=,m=20,s=42,t=False,t=1/ep8.h5",
-    "logs/3d_recognition.py-2023-04-17_010850-bs=32,d=False,e=10,e=False,m=,m=20,s=42,t=False,t=1/ep9.h5",
-    "logs/3d_recognition.py-2023-04-17_011124-bs=32,d=False,e=10,e=False,m=,m=20,s=42,t=False,t=1/ep10.h5",
-    "logs/3d_recognition.py-2023-04-17_011525-bs=32,d=False,e=10,e=False,m=,m=32,s=42,t=False,t=1/ep7.h5",
-    "logs/3d_recognition.py-2023-04-17_012337-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep14.h5",
-    "logs/3d_recognition.py-2023-04-17_123755-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep18.h5"]
-    Ns = [1, 1, 2, 1, 1, 1]
-    mega_skips = [False, False, False, False, False, True]
-    modelnets = [20, 20, 20, 32, 32, 32]'''
 
-    # 95.24
-    '''model_paths = ["logs/3d_recognition.py-2023-04-17_011525-bs=32,d=False,e=10,e=False,m=,m=32,s=42,t=False,t=1/ep7.h5",
-    "logs/3d_recognition.py-2023-04-17_012337-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep14.h5",
-    "logs/3d_recognition.py-2023-04-17_123755-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep18.h5"]
-    Ns = [1, 1, 1]
-    mega_skips = [False, False, True]
-    modelnets = [32, 32, 32]'''
+    # 95.60
+    model_paths = ["logs/3d_recognition.py-2023-04-23_232330-bs=32,d=False,e=20,e=False,m=logs_m^^18_lr-5/ep4.h5",
+    "logs/3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep12.h5",
+    "logs/3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep16.h5"]
+    pools = [True, False, False]
+    model_types = [1, 0, 0]
 
-    # 95.24
-    '''model_paths = ["logs/3d_recognition.py-2023-04-17_012337-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep14.h5",
-    "logs/3d_recognition.py-2023-04-17_123755-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep18.h5"]
-    Ns = [1, 1]
-    mega_skips = [False, True]
-    modelnets = [32, 32]'''
+    # 95.60
+    model_paths = ["logs/3d_recognition.py-2023-04-23_232330-bs=32,d=False,e=20,e=False,m=logs_m^^18_lr-5/ep4.h5",
+    "logs/3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep12.h5",
+    "logs/3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep16.h5",
+    "logs/3d_recognition.py-2023-04-23_235644-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep20.h5",
+    "logs/3d_recognition.py-2023-04-23_225129-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1_stride1_ls02/ep12.h5"]
+    pools = [True, False, False, True, False]
+    model_types = [1, 0, 0, 0, 1]
 
-    # 95.24
-    model_paths = ["logs/3d_recognition.py-2023-04-17_010850-bs=32,d=False,e=10,e=False,m=,m=20,s=42,t=False,t=1/ep9.h5",
-    "logs/3d_recognition.py-2023-04-17_011525-bs=32,d=False,e=10,e=False,m=,m=32,s=42,t=False,t=1/ep7.h5",
-    "logs/3d_recognition.py-2023-04-17_012337-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep14.h5",
-    "logs/3d_recognition.py-2023-04-17_123755-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep18.h5"]
-    Ns = [1, 1, 1, 1]
-    mega_skips = [False, False, False, True]
-    modelnets = [20, 32, 32, 32]
+    # 95.60
+    model_paths = ["logs/3d_recognition.py-2023-04-23_232330-bs=32,d=False,e=20,e=False,m=logs_m^^18_lr-5/ep4.h5",
+    "logs/3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep12.h5",
+    "logs/3d_recognition.py-2023-04-23_233638-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep16.h5",
+    "logs/3d_recognition.py-2023-04-23_235644-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1/ep20.h5",
+    "logs/3d_recognition.py-2023-04-23_225129-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1_stride1_ls02/ep12.h5",
+    "logs/3d_recognition.py-2023-04-23_231055-bs=32,d=False,e=20,e=False,m=,m=32,s=42,t=False,t=1_stride2_ls02/ep18.h5",
+    "logs/3d_recognition.py-2023-04-23_232212-bs=32,d=False,e=20,e=False,m=logs_m^18_lr-4/ep1.h5"]
+    pools = [True, False, False, True, False, True, True]
+    model_types = [1, 0, 0, 0, 1, 1, 1]
 
     if not args.test:
         filename = "3d_recognition_val.txt"
@@ -168,10 +260,13 @@ def main(args: argparse.Namespace) -> None:
         output = tf.zeros([908, len(ModelNet.LABELS)])
     
     for i in tqdm(range(len(model_paths))):
-        model = CNN3D(args, N=Ns[i], mega_skip=mega_skips[i], modelnet=modelnets[i])
+        if model_types[i] == 0:
+            model = CNN3D(args, N=1, mega_skip=False, modelnet=32, pool_beginning=pools[i])
+        else:
+            model = CNN3DPreActiv(args, N=1, mega_skip=False, modelnet=32, pool_beginning=pools[i])
         model.load_weights(model_paths[i])
 
-        modelnet = ModelNet(modelnets[i])
+        modelnet = ModelNet(32)
         if not args.test:
             test = tf.data.Dataset.from_tensor_slices((modelnet.dev.data["voxels"], modelnet.dev.data["labels"]))
         else:
