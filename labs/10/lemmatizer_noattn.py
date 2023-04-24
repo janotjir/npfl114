@@ -56,18 +56,15 @@ class Model(tf.keras.Model):
         if not args.tie_embeddings:
             # TODO: Define the `self._target_embedding` as an embedding layer of the target
             # ids into `args.cle_dim` dimensions.
-            self._target_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), args.cle_dim)
+            #self._target_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), args.cle_dim)
+            self._target_embedding = tf.keras.layers.Embedding(train.lemmas.char_mapping.vocabulary_size(), args.cle_dim)
         else:
             self._target_output_layer.build(args.rnn_dim)
             # TODO: Create a function `self._target_embedding` which computes the embedding of given
             # target ids. When called, use `tf.gather` to index the transposition of the shared embedding
             # matrix `self._target_output_layer.kernel` multiplied by the square root of `args.rnn_dim`.
-
             def tied_embedding(ids):
-                embeddings = tf.gather(
-                    tf.transpose(self._source_embedding.get_weights()[0], [1, 0]) * tf.math.sqrt(args.rnn_dim),
-                    ids,
-                )
+                embeddings = tf.gather(tf.transpose(self._target_output_layer.kernel, [1, 0]) * tf.math.sqrt(tf.cast(args.rnn_dim, tf.float32)), ids)
                 return embeddings
             self._target_embedding = tied_embedding
 
@@ -91,9 +88,7 @@ class Model(tf.keras.Model):
         # TODO: Generate inputs for the decoder, which is obtained from `targets` by
         # - prepending `MorphoDataset.BOW` as the first element of every batch example,
         # - dropping the last element of `targets` (which is `MorphoDataset.EOW`)
-        bow_emb = self._source_embedding(MorphoDataset.BOW)
-        bows = tf.repeat(bow_emb[tf.newaxis, ...], repeats=tf.shape(targets)[0], axis=0)
-        inputs = ...
+        inputs = tf.concat([tf.ones([tf.shape(targets)[0], 1], dtype=tf.int64) * MorphoDataset.BOW, targets[:, :-1]], axis=1)
 
         # TODO: Process the generated inputs by
         # - the `self._target_embedding` layer to obtain embeddings,
@@ -121,9 +116,8 @@ class Model(tf.keras.Model):
         # - `index`: a scalar tensor with dtype `tf.int32` initialized to 0,
         # - `inputs`: a batch of `MorphoDataset.BOW` symbols of type `tf.int64`,
         # - `states`: initial RNN state from the encoder, i.e., `[encoded]`,
-        index = tf.Tensor([0], dtype=tf.int32)
-        #inputs = tf.repeat([[MorphoDataset.BOW]], batch_size, axis=0)
-        inputs = tf.fill([batch_size], MorphoDataset.BOW)
+        index = tf.constant(0, dtype=tf.int32)
+        inputs = tf.cast(tf.fill([batch_size], MorphoDataset.BOW), tf.int64)
         states = [encoded]
 
         # We collect the results from the while-cycle into the following `tf.TensorArray`,
@@ -144,7 +138,7 @@ class Model(tf.keras.Model):
             embeddings = self._target_embedding(inputs)
             outputs, states = self._target_rnn.cell(embeddings, states)
             logits = self._target_output_layer(outputs)
-            predictions = ...
+            predictions = tf.math.argmax(logits, axis=-1)
 
             # Store the predictions in the `result` on the current `index`. Then update
             # the `result_lengths` by setting it to current `index` if an EOW was generated
@@ -156,8 +150,8 @@ class Model(tf.keras.Model):
             # TODO: Finally,
             # - set `inputs` to the `predictions`,
             # - increment the `index` by one.
-            inputs = ...
-            index = ...
+            inputs = predictions
+            index += 1
 
         # Stack the `result` into a dense rectangular tensor, and create a ragged tensor
         # from it using the `result_lengths`.
@@ -175,14 +169,17 @@ class Model(tf.keras.Model):
         # - `tf.strings.unicode_split` with encoding "UTF-8" to generate a ragged
         #   tensor with individual characters as strings,
         # - `self._source_mapping` to remap the character strings to ids.
-        x_flat = ...
+        x_flat = tf.strings.unicode_split(x_flat, "UTF-8")
+        x_flat = self._source_mapping(x_flat)
 
         # TODO: Process `y_flat` by
         # - `tf.strings.unicode_split` with encoding "UTF-8" to generate a ragged
         #   tensor with individual characters as strings,
         # - `self._target_mapping` to remap the character strings to ids,
         # - finally, append a `MorphoDataset.EOW` to the end of every batch example.
-        y_flat = ...
+        y_flat = tf.strings.unicode_split(y_flat, "UTF-8")
+        y_flat = self._target_mapping(y_flat)
+        y_flat = tf.concat([y_flat, tf.ones([tf.shape(y_flat)[0], 1], dtype=tf.int64) * MorphoDataset.EOW], axis=1)
 
         with tf.GradientTape() as tape:
             encoded = self.encoder(x_flat)
@@ -203,7 +200,8 @@ class Model(tf.keras.Model):
         # - `tf.strings.unicode_split` with encoding "UTF-8" to generate a ragged
         #   tensor with individual characters as strings,
         # - `self._source_mapping` to remap the character strings to ids.
-        data_flat = ...
+        data_flat = tf.strings.unicode_split(data_flat, "UTF-8")
+        data_flat = self._source_mapping(data_flat)
 
         encoded = self.encoder(data_flat)
         y_pred = self.decoder_inference(encoded, data_flat.bounding_shape(1) + 10)
