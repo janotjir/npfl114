@@ -23,7 +23,7 @@ parser.add_argument("--recodex", default=False, action="store_true", help="Evalu
 parser.add_argument("--rnn_dim", default=64, type=int, help="RNN layer dimension.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--tie_embeddings", default=False, action="store_true", help="Tie target embeddings.")
-parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--threads", default=12, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
@@ -40,26 +40,36 @@ class Model(tf.keras.Model):
         # - `self._source_embedding` as an embedding layer of source ids into `args.cle_dim` dimensions
         # - `self._source_rnn` as a bidirectional GRU with `args.rnn_dim` units, returning only the last output,
         #   summing opposite directions
-        self._source_embedding = ...
-        self._source_rnn = ...
+        self._source_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), args.cle_dim)
+        self._source_rnn = tf.keras.layers.Bidirectional(
+            tf.keras.layers.GRU(args.rnn_dim, return_sequences=False),
+            merge_mode="sum"
+        )
 
         # TODO: Then define
         # - `self._target_rnn` as a `tf.keras.layers.GRU` layer with `args.rnn_dim` units
         #   and returning whole sequences
         # - `self._target_output_layer` as a Dense layer into as many outputs as there are unique target chars
-        self._target_rnn = ...
-        self._target_output_layer = ...
+        self._target_rnn = tf.keras.layers.GRU(args.rnn_dim, return_sequences=True)
+        self._target_output_layer = tf.keras.layers.Dense(train.lemmas.char_mapping.vocabulary_size())  # activation?
 
         if not args.tie_embeddings:
             # TODO: Define the `self._target_embedding` as an embedding layer of the target
             # ids into `args.cle_dim` dimensions.
-            self._target_embedding = ...
+            self._target_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), args.cle_dim)
         else:
             self._target_output_layer.build(args.rnn_dim)
             # TODO: Create a function `self._target_embedding` which computes the embedding of given
             # target ids. When called, use `tf.gather` to index the transposition of the shared embedding
             # matrix `self._target_output_layer.kernel` multiplied by the square root of `args.rnn_dim`.
-            self._target_embedding = ...
+
+            def tied_embedding(ids):
+                embeddings = tf.gather(
+                    tf.transpose(self._source_embedding.get_weights()[0], [1, 0]) * tf.math.sqrt(args.rnn_dim),
+                    ids,
+                )
+                return embeddings
+            self._target_embedding = tied_embedding
 
         # Compile the model
         self.compile(
@@ -72,21 +82,28 @@ class Model(tf.keras.Model):
 
     def encoder(self, inputs: tf.Tensor) -> tf.Tensor:
         # TODO: Embed the inputs using `self._source_embedding`.
+        embeddings = self._source_embedding(inputs)
 
         # TODO: Run the `self._source_rnn` on the embedded sequences, and return the result.
-        return ...
+        return self._source_rnn(embeddings)
 
     def decoder_training(self, encoded: tf.Tensor, targets: tf.Tensor) -> tf.Tensor:
         # TODO: Generate inputs for the decoder, which is obtained from `targets` by
         # - prepending `MorphoDataset.BOW` as the first element of every batch example,
         # - dropping the last element of `targets` (which is `MorphoDataset.EOW`)
+        bow_emb = self._source_embedding(MorphoDataset.BOW)
+        bows = tf.repeat(bow_emb[tf.newaxis, ...], repeats=tf.shape(targets)[0], axis=0)
+        inputs = ...
 
         # TODO: Process the generated inputs by
         # - the `self._target_embedding` layer to obtain embeddings,
         # - the `self._target_rnn` layer, passing an additional parameter `initial_state=[encoded]`,
         # - the `self._target_output_layer` to obtain logits,
         # and return the result.
-        return ...
+        embedded_inputs = self._target_embedding(inputs)
+        hidden = self._target_rnn(embedded_inputs, initial_state=[encoded])
+        logits = self._target_output_layer(hidden)
+        return logits
 
     @tf.function
     def decoder_inference(self, encoded: tf.Tensor, max_length: tf.Tensor) -> tf.Tensor:
@@ -104,9 +121,10 @@ class Model(tf.keras.Model):
         # - `index`: a scalar tensor with dtype `tf.int32` initialized to 0,
         # - `inputs`: a batch of `MorphoDataset.BOW` symbols of type `tf.int64`,
         # - `states`: initial RNN state from the encoder, i.e., `[encoded]`,
-        index = ...
-        inputs = ...
-        states = ...
+        index = tf.Tensor([0], dtype=tf.int32)
+        #inputs = tf.repeat([[MorphoDataset.BOW]], batch_size, axis=0)
+        inputs = tf.fill([batch_size], MorphoDataset.BOW)
+        states = [encoded]
 
         # We collect the results from the while-cycle into the following `tf.TensorArray`,
         # which is a dynamic collection of tensors that can be written to. We also
@@ -123,6 +141,9 @@ class Model(tf.keras.Model):
             #   where the new states should replace the current `states`.
             # - Pass the outputs through the `self._target_output_layer`.
             # - Finally generate the most probable prediction for every batch example.
+            embeddings = self._target_embedding(inputs)
+            outputs, states = self._target_rnn.cell(embeddings, states)
+            logits = self._target_output_layer(outputs)
             predictions = ...
 
             # Store the predictions in the `result` on the current `index`. Then update
