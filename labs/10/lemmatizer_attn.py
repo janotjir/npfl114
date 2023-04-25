@@ -58,7 +58,7 @@ class WithAttention(tf.keras.layers.AbstractRNNCell):
         # TODO: Compute the attention.
         # - According to the definition, we need to project the encoder states, but we have
         #   already done that in `setup_memory`, so we just take `self._encoded_projected`.
-        # - Compute projected decoder state by passing `states` through the `self._project_decoder_layer`.
+        # - Compute projected decoder state by passing the given state through the `self._project_decoder_layer`.
         # - Sum the two projections. However, the first has shape `[batch_size, input_sequence_len, attention_dim]`
         #   and the second just `[batch_size, attention_dim]`. Therefore, expand the second projection
         #   to `[batch_size, 1, attention_dim]`, and then broadcasting will allow to sum the two projections.
@@ -284,7 +284,7 @@ class Model(tf.keras.Model):
         data_flat = self._source_mapping(data_flat)
 
         encoded = self.encoder(data_flat)
-        y_pred = self.decoder_inference(encoded, data_flat.bounding_shape(1) + 10)
+        y_pred = self.decoder_inference(encoded, data_flat.bounding_shape(axis=1) + 10)
         y_pred = self._target_mapping_inverse(y_pred)
         y_pred = tf.strings.reduce_join(y_pred, axis=-1)
 
