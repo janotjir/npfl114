@@ -35,8 +35,11 @@ class WithAttention(tf.keras.layers.AbstractRNNCell):
 
         # TODO: Define
         # - `self._project_encoder_layer` as a Dense layer with `attention_dim` outputs
+        self._project_encoder_layer = tf.keras.layers.Dense(attention_dim)
         # - `self._project_decoder_layer` as a Dense layer with `attention_dim` outputs
+        self._project_decoder_layer = tf.keras.layers.Dense(attention_dim)
         # - `self._output_layer` as a Dense layer with 1 output
+        self._output_layer = tf.keras.layers.Dense(1)
 
     @property
     def state_size(self):
@@ -46,7 +49,7 @@ class WithAttention(tf.keras.layers.AbstractRNNCell):
         self._encoded = encoded
         # TODO: Pass the `encoded` through the `self._project_encoder_layer` and store
         # the result as `self._encoded_projected`.
-        self._encoded_projected = ...
+        self._encoded_projected = self._project_encoder_layer(encoded)
 
     def call(self, inputs, states):
         # TODO: Compute the attention.
@@ -64,7 +67,16 @@ class WithAttention(tf.keras.layers.AbstractRNNCell):
         #   how many characters the corresponding input form had.
         # - Finally, concatenate `inputs` and `attention` (in this order), and call the `self._cell`
         #   on this concatenated input and the `states`, returning the result.
-        return ...
+        decoder_projected = self._project_decoder_layer(states[0])
+        projected_sum = tf.expand_dims(decoder_projected, 1) + self._encoded_projected
+        sum_tanh = tf.nn.tanh(projected_sum)
+        attn_logits = self._output_layer(sum_tanh)
+        weights = tf.nn.softmax(attn_logits, 1)
+        attention = tf.reduce_sum(self._encoded * weights, 1)
+
+        attended = tf.concat([inputs, attention], 1)
+        out = self._cell(attended, states)
+        return out
 
 
 class Model(tf.keras.Model):
@@ -78,33 +90,48 @@ class Model(tf.keras.Model):
 
         # TODO(lemmatizer_noattn): Define
         # - `self._source_embedding` as an embedding layer of source ids into `args.cle_dim` dimensions
-        self._source_embedding = ...
+        self._source_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), args.cle_dim)
 
         # TODO: Define
         # - `self._source_rnn` as a bidirectional GRU with `args.rnn_dim` units, returning **whole sequences**,
         #   summing opposite directions
-        self._source_rnn = ...
+        self._source_rnn = tf.keras.layers.Bidirectional(
+            tf.keras.layers.GRU(args.rnn_dim, return_sequences=True),
+            merge_mode="sum"
+        )
 
         # TODO: Then define
         # - `self._target_rnn` as a `tf.keras.layers.RNN` returning whole sequences, utilizing the
         #   attention-enhanced cell using `WithAttention` with `attention_dim` of `args.rnn_dim`,
         #   employing the `tf.keras.layers.GRUCell` with `args.rnn_dim` units as the underlying cell.
-        self._target_rnn = ...
+        self._target_rnn = tf.keras.layers.RNN(
+            WithAttention(tf.keras.layers.GRUCell(args.rnn_dim), args.rnn_dim),
+            return_sequences=True
+        )
 
         # TODO(lemmatizer_noattn): Then define
         # - `self._target_output_layer` as a Dense layer into as many outputs as there are unique target chars
-        self._target_output_layer = ...
+        self._target_output_layer = tf.keras.layers.Dense(train.lemmas.char_mapping.vocabulary_size())
 
         if not args.tie_embeddings:
             # TODO(lemmatizer_noattn): Define the `self._target_embedding` as an embedding layer of the target
             # ids into `args.cle_dim` dimensions.
-            self._target_embedding = ...
+            self._target_embedding = tf.keras.layers.Embedding(
+                train.lemmas.char_mapping.vocabulary_size(), args.cle_dim
+            )
         else:
             self._target_output_layer.build(args.rnn_dim)
             # TODO(lemmatizer_noattn): Create a function `self._target_embedding` which computes the embedding of given
             # target ids. When called, use `tf.gather` to index the transposition of the shared embedding
             # matrix `self._target_output_layer.kernel` multiplied by the square root of `args.rnn_dim`.
-            self._target_embedding = ...
+
+            def tied_embedding(ids):
+                embeddings = tf.gather(
+                    tf.transpose(self._target_output_layer.kernel, [1, 0]) * tf.math.sqrt(
+                        tf.cast(args.rnn_dim, tf.float32)),
+                    ids)
+                return embeddings
+            self._target_embedding = tied_embedding
 
         # Compile the model
         self.compile(
@@ -117,25 +144,34 @@ class Model(tf.keras.Model):
 
     def encoder(self, inputs: tf.Tensor) -> tf.Tensor:
         # TODO(lemmatizer_noattn): Embed the inputs using `self._source_embedding`.
+        embeddings = self._source_embedding(inputs)
 
         # TODO: Run the `self._source_rnn` on the embedded sequences, then convert its result
         # to a dense tensor using the `.to_tensor()` call, and return it.
-        return ...
+        return self._source_rnn(embeddings).to_tensor()
 
     def decoder_training(self, encoded: tf.Tensor, targets: tf.Tensor) -> tf.Tensor:
         # TODO(lemmatizer_noattn): Generate inputs for the decoder, which is obtained from `targets` by
         # - prepending `MorphoDataset.BOW` as the first element of every batch example,
         # - dropping the last element of `targets` (which is `MorphoDataset.EOW`)
+        inputs = tf.concat(
+            [tf.ones([tf.shape(targets)[0], 1], dtype=tf.int64) * MorphoDataset.BOW, targets[:, :-1]],
+            axis=1
+        )
 
         # TODO: Pre-compute the projected encoder states in the attention by calling
         # the `setup_memory` of the `self._target_rnn.cell` on the `encoded` input.
+        self._target_rnn.cell.setup_memory(encoded)
 
         # TODO: Process the generated inputs by
         # - the `self._target_embedding` layer to obtain embeddings,
         # - the `self._target_rnn` layer, passing an additional parameter `initial_state=[encoded[:, 0]]`,
         # - the `self._target_output_layer` to obtain logits,
         # and return the result.
-        return ...
+        embeddings = self._target_embedding(inputs)
+        hidden = self._target_rnn(embeddings, initial_state=[encoded[:, 0]])
+        logits = self._target_output_layer(hidden)
+        return logits
 
     @tf.function
     def decoder_inference(self, encoded: tf.Tensor, max_length: tf.Tensor) -> tf.Tensor:
@@ -151,14 +187,15 @@ class Model(tf.keras.Model):
 
         # TODO(decoder_training): Pre-compute the projected encoder states in the attention by calling
         # the `setup_memory` of the `self._target_rnn.cell` on the `encoded` input.
+        self._target_rnn.cell.setup_memory(encoded)
 
         # TODO: Define the following variables, that we will use in the cycle:
         # - `index`: a scalar tensor with dtype `tf.int32` initialized to 0,
         # - `inputs`: a batch of `MorphoDataset.BOW` symbols of type `tf.int64`,
         # - `states`: initial RNN state from the encoder, i.e., `[encoded[:, 0]]`,
-        index = ...
-        inputs = ...
-        states = ...
+        index = tf.constant(0, dtype=tf.int32)
+        inputs = tf.cast(tf.fill([batch_size], MorphoDataset.BOW), tf.int64)
+        states = [encoded[:, 0]]
 
         # We collect the results from the while-cycle into the following `tf.TensorArray`,
         # which is a dynamic collection of tensors that can be written to. We also
@@ -175,7 +212,10 @@ class Model(tf.keras.Model):
             #   where the new states should replace the current `states`.
             # - Pass the outputs through the `self._target_output_layer`.
             # - Finally generate the most probable prediction for every batch example.
-            predictions = ...
+            embeddings = self._target_embedding(inputs)
+            outputs, states = self._target_rnn.cell(embeddings, states)
+            logits = self._target_output_layer(outputs)
+            predictions = tf.math.argmax(logits, axis=-1)
 
             # Store the predictions in the `result` on the current `index`. Then update
             # the `result_lengths` by setting it to current `index` if an EOW was generated
@@ -187,8 +227,8 @@ class Model(tf.keras.Model):
             # TODO(lemmatizer_noattn): Finally,
             # - set `inputs` to the `predictions`,
             # - increment the `index` by one.
-            inputs = ...
-            index = ...
+            inputs = predictions
+            index += 1
 
         # Stack the `result` into a dense rectangular tensor, and create a ragged tensor
         # from it using the `result_lengths`.
@@ -206,14 +246,17 @@ class Model(tf.keras.Model):
         # - `tf.strings.unicode_split` with encoding "UTF-8" to generate a ragged
         #   tensor with individual characters as strings,
         # - `self._source_mapping` to remap the character strings to ids.
-        x_flat = ...
+        x_flat = tf.strings.unicode_split(x_flat, "UTF-8")
+        x_flat = self._source_mapping(x_flat)
 
         # TODO(lemmatizer_noattn): Process `y_flat` by
         # - `tf.strings.unicode_split` with encoding "UTF-8" to generate a ragged
         #   tensor with individual characters as strings,
         # - `self._target_mapping` to remap the character strings to ids,
         # - finally, append a `MorphoDataset.EOW` to the end of every batch example.
-        y_flat = ...
+        y_flat = tf.strings.unicode_split(y_flat, "UTF-8")
+        y_flat = self._target_mapping(y_flat)
+        y_flat = tf.concat([y_flat, tf.ones([tf.shape(y_flat)[0], 1], dtype=tf.int64) * MorphoDataset.EOW], axis=1)
 
         with tf.GradientTape() as tape:
             encoded = self.encoder(x_flat)
@@ -234,7 +277,8 @@ class Model(tf.keras.Model):
         # - `tf.strings.unicode_split` with encoding "UTF-8" to generate a ragged
         #   tensor with individual characters as strings,
         # - `self._source_mapping` to remap the character strings to ids.
-        data_flat = ...
+        data_flat = tf.strings.unicode_split(data_flat, "UTF-8")
+        data_flat = self._source_mapping(data_flat)
 
         encoded = self.encoder(data_flat)
         y_pred = self.decoder_inference(encoded, data_flat.bounding_shape(1) + 10)
