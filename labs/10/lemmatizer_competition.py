@@ -14,7 +14,7 @@ from morpho_dataset import MorphoDataset
 # TODO: Define reasonable defaults and optionally more parameters.
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=128, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
 parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
@@ -294,7 +294,7 @@ def main(args: argparse.Namespace) -> None:
             model.load_weights(args.model)
         
         def save_model(epoch, logs):
-            model.save(os.path.join(args.logdir, f"ep{epoch+1}.h5"), include_optimizer=False)
+            model.save_weights(os.path.join(args.logdir, f"ep{epoch+1}"))
 
         model.fit(train, epochs=args.epochs, validation_data=dev, callbacks=[model.tb_callback, tf.keras.callbacks.LambdaCallback(on_epoch_end=save_model)])
 
