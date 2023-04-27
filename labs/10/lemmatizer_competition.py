@@ -3,6 +3,7 @@ import argparse
 import datetime
 import os
 import re
+import shutil
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import numpy as np
@@ -16,7 +17,7 @@ from morpho_dataset import MorphoDataset
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=128, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
+parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 
@@ -70,18 +71,20 @@ class Model(tf.keras.Model):
 
         # TODO(lemmatizer_noattn): Define
         # - `self._source_embedding` as an embedding layer of source ids into `args.cle_dim` dimensions
-        self._source_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), 128)
+        embedding_dim = 256
+        self._source_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), embedding_dim)
 
         # TODO: Define
         # - `self._source_rnn` as a bidirectional GRU with `args.rnn_dim` units, returning **whole sequences**,
         #   summing opposite directions
-        self._source_rnn = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(64, return_sequences=True), merge_mode="sum")
+        self._source_rnn = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True), merge_mode="sum")
 
         # TODO: Then define
         # - `self._target_rnn` as a `tf.keras.layers.RNN` returning whole sequences, utilizing the
         #   attention-enhanced cell using `WithAttention` with `attention_dim` of `args.rnn_dim`,
         #   employing the `tf.keras.layers.GRUCell` with `args.rnn_dim` units as the underlying cell.
-        self._target_rnn = tf.keras.layers.RNN(WithAttention(tf.keras.layers.GRUCell(64), 64), return_sequences=True)
+        rnn_dim = 256
+        self._target_rnn = tf.keras.layers.RNN(WithAttention(tf.keras.layers.GRUCell(rnn_dim), rnn_dim), return_sequences=True)
 
         # TODO(lemmatizer_noattn): Then define
         # - `self._target_output_layer` as a Dense layer into as many outputs as there are unique target chars
@@ -89,18 +92,18 @@ class Model(tf.keras.Model):
 
 
         # TODO: tie embeddings
-        self._target_output_layer.build(64)
+        self._target_output_layer.build(rnn_dim)
         # TODO(lemmatizer_noattn): Create a function `self._target_embedding` which computes the embedding of given
         # target ids. When called, use `tf.gather` to index the transposition of the shared embedding
         # matrix `self._target_output_layer.kernel` multiplied by the square root of `args.rnn_dim`.
         def tied_embedding(ids):
-            embeddings = tf.gather(tf.transpose(self._target_output_layer.kernel, [1, 0]) * tf.math.sqrt(tf.cast(64, tf.float32)), ids)
+            embeddings = tf.gather(tf.transpose(self._target_output_layer.kernel, [1, 0]) * tf.math.sqrt(tf.cast(rnn_dim, tf.float32)), ids)
             return embeddings
         self._target_embedding = tied_embedding
 
         # Compile the model
         self.compile(
-            optimizer=tf.optimizers.Adam(jit_compile=False),
+            optimizer=tf.optimizers.Adam(learning_rate=1e-3, jit_compile=False),
             loss=tf.losses.SparseCategoricalCrossentropy(from_logits=True),
             metrics=[tf.metrics.Accuracy(name="accuracy")],
         )
@@ -268,10 +271,9 @@ def main(args: argparse.Namespace) -> None:
         # tf.data.experimental.enable_debug_mode()
 
     # Create logdir name
-    args.logdir = os.path.join("logs", "{}-{}-{}".format(
-        os.path.basename(globals().get("__file__", "notebook")),
-        datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S"),
-        ",".join(("{}={}".format(re.sub("(.)[^_]*_?", r"\1", k), v) for k, v in sorted(vars(args).items())))
+    args.logdir = os.path.join("logs", "{}-{}".format(
+        os.path.basename(globals().get("__file__", "notebook"))[:-3],
+        datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     ))
 
     # Load the data. Using analyses is only optional.
@@ -286,6 +288,9 @@ def main(args: argparse.Namespace) -> None:
         return dataset
 
     if not args.test and not args.eval:
+        os.makedirs(args.logdir, exist_ok=True)
+        shutil.copy(__file__, os.path.join(args.logdir, "code_snapshot.py")) 
+
         train, dev = create_dataset("train"), create_dataset("dev")
 
         # TODO: Create the model and train it
@@ -294,7 +299,7 @@ def main(args: argparse.Namespace) -> None:
             model.load_weights(args.model)
         
         def save_model(epoch, logs):
-            model.save_weights(os.path.join(args.logdir, f"ep{epoch+1}"))
+            model.save_weights(os.path.join(args.logdir, f"ep{epoch+1}.ckpt"))
 
         model.fit(train, epochs=args.epochs, validation_data=dev, callbacks=[model.tb_callback, tf.keras.callbacks.LambdaCallback(on_epoch_end=save_model)])
 
@@ -302,7 +307,7 @@ def main(args: argparse.Namespace) -> None:
         # load trained model
         model = Model(args, morpho.train)
         model.load_weights(args.model)
-        args.logdir = "/".join(args.model.split("/")[:-1])
+        
 
     if args.eval:
         test = create_dataset("dev")
