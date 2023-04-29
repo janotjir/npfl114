@@ -8,6 +8,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by d
 
 import numpy as np
 import tensorflow as tf
+tf.get_logger().addFilter(lambda m: "Analyzer.lamba_check" not in m.getMessage())  # Avoid pesky warning
 
 from morpho_analyzer import MorphoAnalyzer
 from morpho_dataset import MorphoDataset
@@ -16,6 +17,8 @@ from morpho_dataset import MorphoDataset
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=128, type=int, help="Batch size.")
+parser.add_argument("--rnn_dim", default=256, type=int, help="RNN layer dimension.")
+parser.add_argument("--emb_dim", default=256, type=int, help="Embedding dimension.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
 parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
@@ -80,10 +83,11 @@ class Model(tf.keras.Model):
         self.tag_hidden2 = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(512, return_sequences=True), "sum")
         self.tag_hidden3 = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(512, return_sequences=True), "sum")
         self.tag_final = tf.keras.layers.Dense(train.tags.word_mapping.vocabulary_size(), activation=tf.nn.softmax)
+        self.tag_to_decoder = tf.keras.layers.Dense(args.rnn_dim, activation=None)
 
         # TODO(lemmatizer_noattn): Define
         # - `self._source_embedding` as an embedding layer of source ids into `args.cle_dim` dimensions
-        embedding_dim = 256
+        embedding_dim = args.emb_dim
         self._source_embedding = tf.keras.layers.Embedding(train.forms.char_mapping.vocabulary_size(), embedding_dim)
 
         # TODO: Define
@@ -95,7 +99,7 @@ class Model(tf.keras.Model):
         # - `self._target_rnn` as a `tf.keras.layers.RNN` returning whole sequences, utilizing the
         #   attention-enhanced cell using `WithAttention` with `attention_dim` of `args.rnn_dim`,
         #   employing the `tf.keras.layers.GRUCell` with `args.rnn_dim` units as the underlying cell.
-        rnn_dim = 256
+        rnn_dim = args.rnn_dim
         self._target_rnn = tf.keras.layers.RNN(WithAttention(tf.keras.layers.GRUCell(rnn_dim), rnn_dim), return_sequences=True)
 
         # TODO(lemmatizer_noattn): Then define
@@ -120,7 +124,7 @@ class Model(tf.keras.Model):
         self.compile(
             optimizer=tf.optimizers.Adam(learning_rate=1e-3, jit_compile=False),
             loss={"lemmas" : tf.losses.SparseCategoricalCrossentropy(from_logits=True), "tags" : ragged_sparse_categorical_crossentropy},
-            metrics=[tf.metrics.Accuracy(name="accuracy")],
+            metrics=[{"lemmas" : tf.metrics.Accuracy(name="accuracy"), "tags" : None}], #tf.metrics.SparseCategoricalAccuracy(name="tag_accuracy")}],
         )
 
         self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
@@ -189,9 +193,9 @@ class Model(tf.keras.Model):
         hidden = tf.RaggedTensor.from_tensor(hidden_, hidden.row_lengths())
         hidden_ = self.tag_hidden3(hidden.to_tensor())
         hidden = tf.RaggedTensor.from_tensor(hidden_, hidden.row_lengths())
-        predictions = self.tag_final(hidden)
+        #predictions = self.tag_final(hidden)
         
-        return predictions
+        return hidden
 
     def decoder_training(self, encoded: tf.Tensor, targets: tf.Tensor, tags) -> tf.Tensor:
         # TODO(lemmatizer_noattn): Generate inputs for the decoder, which is obtained from `targets` by
@@ -209,13 +213,17 @@ class Model(tf.keras.Model):
         # - the `self._target_output_layer` to obtain logits,
         # and return the result.
         embeddings = self._target_embedding(inputs)
-        tf.print(tf.shape(embeddings), tf.shape(tags))
+        tag_codes = tf.reshape(self.tag_to_decoder(tags), [-1, tf.shape(embeddings)[-1]])
+        tag_logits = self.tag_final(tags)
+        #tf.print(tf.shape(embeddings), tf.shape(tag_codes))
+        embeddings = tf.concat([tag_codes[:, tf.newaxis, :], embeddings[:, 1:, :]], axis=1)
+        #tf.print(tf.shape(embeddings), tf.shape(tags))
         hidden = self._target_rnn(embeddings, initial_state=[encoded[:, 0]])
         logits = self._target_output_layer(hidden)
-        return {"lemmas" : logits.values, "tags" : tags}
+        return {"lemmas" : logits.values, "tags" : tag_logits}
 
     @tf.function
-    def decoder_inference(self, encoded: tf.Tensor, max_length: tf.Tensor) -> tf.Tensor:
+    def decoder_inference(self, encoded: tf.Tensor, max_length: tf.Tensor, tags) -> tf.Tensor:
         """The decoder_inference runs a while-cycle inside a computation graph.
 
         To that end, it needs to be explicitly marked as @tf.function, so that the
@@ -254,6 +262,9 @@ class Model(tf.keras.Model):
             # - Pass the outputs through the `self._target_output_layer`.
             # - Finally generate the most probable prediction for every batch example.
             embeddings = self._target_embedding(inputs)
+            if tf.equal(index, tf.constant(0, dtype=tf.int32)):
+                tag_codes = tf.reshape(self.tag_to_decoder(tags), [-1, tf.shape(embeddings)[-1]])
+                inputs = tag_codes
             outputs, states = self._target_rnn.cell(embeddings, states)
             logits = self._target_output_layer(outputs)
             predictions = tf.math.argmax(logits, axis=-1)
@@ -324,18 +335,23 @@ class Model(tf.keras.Model):
         data_flat = tf.strings.unicode_split(data_flat, "UTF-8")
         data_flat = self._source_mapping(data_flat)
 
+        pred_tags = self.tagger(data)
+        #tag_logits = self.tag_final(pred_tags)
+        
         encoded = self.encoder(data_flat)
-        y_pred = self.decoder_inference(encoded, data_flat.bounding_shape(axis=1) + 10)
+        y_pred = self.decoder_inference(encoded, data_flat.bounding_shape(axis=1) + 10, pred_tags)
         y_pred = self._target_mapping_inverse(y_pred)
         y_pred = tf.strings.reduce_join(y_pred, axis=-1)
 
         # Finally, convert the individual lemmas back to sentences of lemmas using
         # the original sentence boundaries.
         y_pred = data.with_values(y_pred)
+        #return {"lemmas" : y_pred, "tags" : tag_logits}
         return y_pred
 
     def test_step(self, data):
-        x, y = data
+        x, y, tags = data
+
         y_pred = self.predict_step(x)
         self.compiled_metrics.update_state(tf.ones_like(y, dtype=tf.int32), tf.cast(y_pred == y, tf.int32))
         return {m.name: m.result() for m in self.metrics if m.name != "loss"}
