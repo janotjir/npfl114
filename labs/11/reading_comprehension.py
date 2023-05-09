@@ -8,17 +8,65 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by d
 import numpy as np
 import tensorflow as tf
 import transformers
+import os
 
 from reading_comprehension_dataset import ReadingComprehensionDataset
+
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 
 # TODO: Define reasonable defaults and optionally more parameters.
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
-parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
-parser.add_argument("--epochs", default=..., type=int, help="Number of epochs.")
+parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")
+parser.add_argument("--debug", default=True, action="store_true", help="If given, run functions eagerly.")
+parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+
+parser.add_argument("--test", default=False, action="store_true", help="Load model and only annotate test data")
+parser.add_argument("--model", default="", type=str, help="Model path")
+
+
+class RoundACC(tf.keras.metrics.Metric):
+    def __init__(self, name="Rounded match accuracy", **kwargs):
+        super(RoundACC, self).__init__(name=name, **kwargs)
+        self.samples = self.add_weight(name="samp", initializer='zeros')
+        self.correct = self.add_weight(name="ok", initializer='zeros')
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        rounded = tf.cast(tf.round(y_pred), tf.int32)
+        hit = tf.reduce_all(tf.equal(y_true, rounded))
+        self.samples.assign_add(tf.constant(1, dtype=tf.float32))
+        self.correct.assign_add(tf.cast(hit, tf.float32))
+
+    def result(self):
+        return self.correct / self.samples
+
+
+class Comprehender(tf.keras.Model):
+    def __init__(self, args, train, boreczech) -> None:
+        inputs = (tf.keras.layers.Input(shape=[None], dtype=tf.int32, ragged=True),
+                  tf.keras.layers.Input(shape=[None], dtype=tf.int32, ragged=True))
+
+        # get output of eleczech's last layer
+        boreczech_output = boreczech(input_ids=inputs[0].to_tensor(), attention_mask=inputs[1].to_tensor())
+
+        # TODO: Find out where to take outputs from
+        boreczech_output = boreczech_output.last_hidden_state[:, 0]
+
+        predictions = tf.keras.layers.Dense(2, activation="relu")(boreczech_output)
+
+        super().__init__(inputs=inputs, outputs=predictions)
+
+        self.compile(
+            optimizer=tf.optimizers.experimental.Adam(learning_rate=1e-4, jit_compile=False),
+            loss=tf.losses.MeanSquaredError(),
+            metrics=[RoundACC(name="accuracy")]
+        )
 
 
 def main(args: argparse.Namespace) -> None:
@@ -41,11 +89,111 @@ def main(args: argparse.Namespace) -> None:
     tokenizer = transformers.AutoTokenizer.from_pretrained("ufal/robeczech-base")
     robeczech = transformers.TFAutoModel.from_pretrained("ufal/robeczech-base")
 
+    #print(robeczech.config)
+
     # Load the data
-    dataset = ReadingComprehensionDataset()
+    loaded_data = ReadingComprehensionDataset()
+
+    def extract_data(example):
+        context_tok = tf.constant(tokenizer.encode(example["context"]))
+        token_list = []
+        mask_list = []
+        #str_list = []
+        output_list = []
+        for ex in example["qas"]:
+            q_tok = tf.constant(tokenizer.encode(ex["question"]))
+            #q_tok = tf.pad(q_tok, tf.constant([[1, 0]]), constant_values=1)
+            token_ids = tf.concat([context_tok, q_tok], axis=0)
+            attention_mask = tf.ones(tf.shape(token_ids), tf.int32)
+            str_out = ex["answers"][0]["text"]
+            # Let's say we want to predict the index of the starting word and length of the answer via regression
+            out = tf.constant([ex["answers"][0]["start"], len(str_out.split())])
+
+            token_list.append(token_ids)
+            mask_list.append(attention_mask)
+            #str_list.append(str_out)
+            output_list.append(out)
+
+        return token_list, mask_list, output_list
+
+    def extract_tst_data(example):
+        context_tok = tf.constant(tokenizer.encode(example["context"]))
+        token_list = []
+        mask_list = []
+        output_list = []
+        for ex in example["qas"]:
+            q_tok = tf.constant(tokenizer.encode(ex["question"]))
+            #q_tok = tf.pad(q_tok, tf.constant([[1, 0]]), constant_values=1)
+            token_ids = tf.concat([context_tok, q_tok], axis=0)
+            attention_mask = tf.ones(tf.shape(token_ids), tf.int32)
+
+            token_list.append(token_ids)
+            mask_list.append(attention_mask)
+            output_list.append(tf.constant([0, 0]))
+
+        return token_list, mask_list, output_list
+
+    def group_inputs(tokens, masks, output):
+        return (tokens, masks), output
+
+    def create_dataset(name):
+        dataset = getattr(loaded_data, name).paragraphs
+        examp_func = extract_data
+        if name == "test":
+            examp_func = extract_tst_data
+        in_tokens = []
+        in_masks = []
+        out = []
+        for ex in dataset:
+            tokens, masks, outs = examp_func(ex)
+            in_tokens.extend(tokens)
+            in_masks.extend(masks)
+            out.extend(outs)
+        in_tokens = tf.ragged.stack(in_tokens)
+        in_masks = tf.ragged.stack(in_masks)
+        output = tf.stack(out)
+        dataset = tf.data.Dataset.from_tensor_slices((in_tokens, in_masks, output))
+        dataset = dataset.map(group_inputs)
+        dataset = dataset.shuffle(len(dataset), seed=args.seed) if name == "train" else dataset
+        dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+        return dataset
+
+    if os.path.exists("train_data"):
+        train = tf.data.Dataset.load("train_data")
+        dev = tf.data.Dataset.load("dev_data")
+        test = tf.data.Dataset.load("test_data")
+        print("Data loaded")
+    else:
+        train, dev, test = create_dataset("train"), create_dataset("dev"), create_dataset("test")
+        train.save("train_data")
+        dev.save("dev_data")
+        test.save("test_data")
+        print("Data created")
+
+    """for ex in train:
+        print(ex)
+        break
+    exit()"""
 
     # TODO: Create the model and train it
-    model = ...
+    if not args.test:
+
+        # TODO: Create the model and train it
+        model = Comprehender(args, train, robeczech)
+
+        tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
+
+        def save_model(epoch, logs):
+            model.save(os.path.join(args.logdir, f"ep{epoch + 1}.h5"), include_optimizer=False)
+
+        model.fit(train, epochs=args.epochs, validation_data=dev,
+                  callbacks=[tb_callback, tf.keras.callbacks.LambdaCallback(on_epoch_end=save_model)])
+
+    else:
+        args.logdir = "/".join(args.model.split("/")[:-1])
+        model = Comprehender(args, train, robeczech)
+        model.load_weights(args.model)
 
     # Generate test set annotations, but in `args.logdir` to allow parallel execution.
     os.makedirs(args.logdir, exist_ok=True)
