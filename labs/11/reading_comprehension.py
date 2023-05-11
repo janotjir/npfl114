@@ -21,8 +21,8 @@ from reading_comprehension_dataset import ReadingComprehensionDataset
 # TODO: Define reasonable defaults and optionally more parameters.
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")
-parser.add_argument("--debug", default=True, action="store_true", help="If given, run functions eagerly.")
+parser.add_argument("--batch_size", default=16, type=int, help="Batch size.")
+parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
 parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
@@ -46,26 +46,26 @@ class RoundACC(tf.keras.metrics.Metric):
     def result(self):
         return self.correct / self.samples
 
-
 class Comprehender(tf.keras.Model):
     def __init__(self, args, train, boreczech) -> None:
         inputs = (tf.keras.layers.Input(shape=[None], dtype=tf.int32, ragged=True),
                   tf.keras.layers.Input(shape=[None], dtype=tf.int32, ragged=True))
 
-        # get output of eleczech's last layer
-        boreczech_output = boreczech(input_ids=inputs[0].to_tensor(), attention_mask=inputs[1].to_tensor())
+        boreczech_output = boreczech(input_ids=inputs[0].to_tensor(), attention_mask=inputs[1].to_tensor()).last_hidden_state
 
-        # TODO: Find out where to take outputs from
-        boreczech_output = boreczech_output.last_hidden_state[:, 0]
+        pred_start = tf.keras.layers.Dense(1)(boreczech_output)
+        pred_start = tf.squeeze(pred_start, axis=-1)
+        pred_start = tf.keras.layers.Softmax()(pred_start)
 
-        predictions = tf.keras.layers.Dense(2, activation="relu")(boreczech_output)
+        pred_end = tf.keras.layers.Dense(1)(boreczech_output)
+        pred_end = tf.squeeze(pred_end, axis=-1)
+        pred_end = tf.keras.layers.Softmax()(pred_end)
 
-        super().__init__(inputs=inputs, outputs=predictions)
+        super().__init__(inputs=inputs, outputs={"a_start": pred_start, "a_end": pred_end})
 
         self.compile(
             optimizer=tf.optimizers.experimental.Adam(learning_rate=1e-4, jit_compile=False),
-            loss=tf.losses.MeanSquaredError(),
-            metrics=[RoundACC(name="accuracy")]
+            loss={"a_start":tf.keras.losses.SparseCategoricalCrossentropy(), "a_end":tf.keras.losses.SparseCategoricalCrossentropy()}
         )
 
 
@@ -95,19 +95,19 @@ def main(args: argparse.Namespace) -> None:
     loaded_data = ReadingComprehensionDataset()
 
     def extract_data(example):
-        context_tok = tf.constant(tokenizer.encode(example["context"]))
+        context_tok = tf.constant(tokenizer.encode(example["context"], max_length=512, truncation=True))
         token_list = []
         mask_list = []
         #str_list = []
         output_list = []
         for ex in example["qas"]:
-            q_tok = tf.constant(tokenizer.encode(ex["question"]))
+            q_tok = tf.constant(tokenizer.encode(ex["question"], max_length=512,  truncation=True))
             #q_tok = tf.pad(q_tok, tf.constant([[1, 0]]), constant_values=1)
             token_ids = tf.concat([context_tok, q_tok], axis=0)
             attention_mask = tf.ones(tf.shape(token_ids), tf.int32)
             str_out = ex["answers"][0]["text"]
             # Let's say we want to predict the index of the starting word and length of the answer via regression
-            out = tf.constant([ex["answers"][0]["start"], len(str_out.split())])
+            out = tf.constant([ex["answers"][0]["start"], ex["answers"][0]["start"]+len(str_out.split())-1])
 
             token_list.append(token_ids)
             mask_list.append(attention_mask)
@@ -117,12 +117,12 @@ def main(args: argparse.Namespace) -> None:
         return token_list, mask_list, output_list
 
     def extract_tst_data(example):
-        context_tok = tf.constant(tokenizer.encode(example["context"]))
+        context_tok = tf.constant(tokenizer.encode(example["context"], max_length=512, truncation=True))
         token_list = []
         mask_list = []
         output_list = []
         for ex in example["qas"]:
-            q_tok = tf.constant(tokenizer.encode(ex["question"]))
+            q_tok = tf.constant(tokenizer.encode(ex["question"], max_length=512, truncation=True))
             #q_tok = tf.pad(q_tok, tf.constant([[1, 0]]), constant_values=1)
             token_ids = tf.concat([context_tok, q_tok], axis=0)
             attention_mask = tf.ones(tf.shape(token_ids), tf.int32)
@@ -134,7 +134,7 @@ def main(args: argparse.Namespace) -> None:
         return token_list, mask_list, output_list
 
     def group_inputs(tokens, masks, output):
-        return (tokens, masks), output
+        return (tokens, masks), {"a_start":output[0], "a_end":output[1]}
 
     def create_dataset(name):
         dataset = getattr(loaded_data, name).paragraphs
