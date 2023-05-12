@@ -21,7 +21,7 @@ from reading_comprehension_dataset import ReadingComprehensionDataset
 # TODO: Define reasonable defaults and optionally more parameters.
 # Also, you can set the number of threads to 0 to use all your CPU cores.
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=16, type=int, help="Batch size.")
+parser.add_argument("--batch_size", default=8, type=int, help="Batch size.")
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
 parser.add_argument("--epochs", default=1, type=int, help="Number of epochs.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
@@ -47,7 +47,7 @@ class RoundACC(tf.keras.metrics.Metric):
         return self.correct / self.samples
 
 class Comprehender(tf.keras.Model):
-    def __init__(self, args, train, boreczech) -> None:
+    def __init__(self, args, boreczech) -> None:
         inputs = (tf.keras.layers.Input(shape=[None], dtype=tf.int32, ragged=True),
                   tf.keras.layers.Input(shape=[None], dtype=tf.int32, ragged=True))
 
@@ -55,17 +55,28 @@ class Comprehender(tf.keras.Model):
 
         pred_start = tf.keras.layers.Dense(1)(boreczech_output)
         pred_start = tf.squeeze(pred_start, axis=-1)
-        pred_start = tf.keras.layers.Softmax()(pred_start)
+        pred_start = tf.keras.layers.Softmax(name="a_start")(pred_start)
 
         pred_end = tf.keras.layers.Dense(1)(boreczech_output)
         pred_end = tf.squeeze(pred_end, axis=-1)
-        pred_end = tf.keras.layers.Softmax()(pred_end)
+        pred_end = tf.keras.layers.Softmax(name="a_end")(pred_end)
+
+        def sparse_loss(y_true, y_pred):
+            y_true = tf.squeeze(y_true)
+            y_true = tf.one_hot(y_true, depth=tf.shape(y_pred)[-1])
+
+            loss = tf.keras.backend.categorical_crossentropy(y_true, y_pred)
+            loss = tf.keras.backend.mean(loss)
+
+            return loss
 
         super().__init__(inputs=inputs, outputs={"a_start": pred_start, "a_end": pred_end})
 
         self.compile(
-            optimizer=tf.optimizers.experimental.Adam(learning_rate=1e-4, jit_compile=False),
-            loss={"a_start":tf.keras.losses.SparseCategoricalCrossentropy(), "a_end":tf.keras.losses.SparseCategoricalCrossentropy()}
+            optimizer=tf.optimizers.experimental.Adam(learning_rate=1e-5, jit_compile=False),
+            loss={"a_start":sparse_loss, 
+            "a_end":sparse_loss},
+            metrics={"a_start": [tf.metrics.SparseCategoricalAccuracy()], "a_end": [tf.metrics.SparseCategoricalAccuracy(name="accuracy_end")]}
         )
 
 
@@ -107,7 +118,7 @@ def main(args: argparse.Namespace) -> None:
             attention_mask = tf.ones(tf.shape(token_ids), tf.int32)
             str_out = ex["answers"][0]["text"]
             # Let's say we want to predict the index of the starting word and length of the answer via regression
-            out = tf.constant([ex["answers"][0]["start"], ex["answers"][0]["start"]+len(str_out.split())-1])
+            out = tf.constant([int(ex["answers"][0]["start"]), int(ex["answers"][0]["start"])+len(str_out.split())-1])
 
             token_list.append(token_ids)
             mask_list.append(attention_mask)
@@ -159,7 +170,9 @@ def main(args: argparse.Namespace) -> None:
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
 
-    if os.path.exists("train_data"):
+    train, dev, test = create_dataset("train"), create_dataset("dev"), create_dataset("test")
+
+    '''if os.path.exists("train_data"):
         train = tf.data.Dataset.load("train_data")
         dev = tf.data.Dataset.load("dev_data")
         test = tf.data.Dataset.load("test_data")
@@ -169,7 +182,7 @@ def main(args: argparse.Namespace) -> None:
         train.save("train_data")
         dev.save("dev_data")
         test.save("test_data")
-        print("Data created")
+        print("Data created")'''
 
     """for ex in train:
         print(ex)
@@ -180,7 +193,7 @@ def main(args: argparse.Namespace) -> None:
     if not args.test:
 
         # TODO: Create the model and train it
-        model = Comprehender(args, train, robeczech)
+        model = Comprehender(args, robeczech)
 
         tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
 
@@ -192,7 +205,7 @@ def main(args: argparse.Namespace) -> None:
 
     else:
         args.logdir = "/".join(args.model.split("/")[:-1])
-        model = Comprehender(args, train, robeczech)
+        model = Comprehender(args, robeczech)
         model.load_weights(args.model)
 
     # Generate test set annotations, but in `args.logdir` to allow parallel execution.
