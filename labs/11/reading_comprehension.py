@@ -31,7 +31,7 @@ parser.add_argument("--test", default=False, action="store_true", help="Load mod
 parser.add_argument("--model", default="", type=str, help="Model path")
 
 
-class RoundACC(tf.keras.metrics.Metric):
+'''class RoundACC(tf.keras.metrics.Metric):
     def __init__(self, name="Rounded match accuracy", **kwargs):
         super(RoundACC, self).__init__(name=name, **kwargs)
         self.samples = self.add_weight(name="samp", initializer='zeros')
@@ -44,7 +44,8 @@ class RoundACC(tf.keras.metrics.Metric):
         self.correct.assign_add(tf.cast(hit, tf.float32))
 
     def result(self):
-        return self.correct / self.samples
+        return self.correct / self.samples'''
+
 
 class Comprehender(tf.keras.Model):
     def __init__(self, args, boreczech) -> None:
@@ -106,37 +107,38 @@ def main(args: argparse.Namespace) -> None:
     loaded_data = ReadingComprehensionDataset()
 
     def extract_data(example):
-        context_tok = tf.constant(tokenizer.encode(example["context"], max_length=512, truncation=True))
+        context = example["context"]
         token_list = []
         mask_list = []
-        #str_list = []
         output_list = []
         for ex in example["qas"]:
-            q_tok = tf.constant(tokenizer.encode(ex["question"], max_length=512,  truncation=True))
-            #q_tok = tf.pad(q_tok, tf.constant([[1, 0]]), constant_values=1)
-            token_ids = tf.concat([context_tok, q_tok], axis=0)
-            attention_mask = tf.ones(tf.shape(token_ids), tf.int32)
-            str_out = ex["answers"][0]["text"]
-            # Let's say we want to predict the index of the starting word and length of the answer via regression
-            out = tf.constant([int(ex["answers"][0]["start"]), int(ex["answers"][0]["start"])+len(str_out.split())-1])
+            question = ex["question"]
+            tok = tokenizer(context, question, max_length=512, truncation="only_first")
+            token_ids = tok["input_ids"]
+            attention_mask = tok["attention_mask"]
+            start = tok.char_to_token(ex["answers"][0]["start"])
+            end = tok.char_to_token(ex["answers"][0]["start"] + len(ex["answers"][0]["text"]) - 1)
+            if start is None or end is None:
+                #print("Skip")
+                continue
+            out = tf.constant([int(start), int(end)])
 
             token_list.append(token_ids)
             mask_list.append(attention_mask)
-            #str_list.append(str_out)
             output_list.append(out)
 
         return token_list, mask_list, output_list
 
     def extract_tst_data(example):
-        context_tok = tf.constant(tokenizer.encode(example["context"], max_length=512, truncation=True))
+        context = example["context"]
         token_list = []
         mask_list = []
         output_list = []
         for ex in example["qas"]:
-            q_tok = tf.constant(tokenizer.encode(ex["question"], max_length=512, truncation=True))
-            #q_tok = tf.pad(q_tok, tf.constant([[1, 0]]), constant_values=1)
-            token_ids = tf.concat([context_tok, q_tok], axis=0)
-            attention_mask = tf.ones(tf.shape(token_ids), tf.int32)
+            question = ex["question"]
+            tok = tokenizer(context, question, max_length=512, truncation="only_first")
+            token_ids = tok["input_ids"]
+            attention_mask = tok["attention_mask"]
 
             token_list.append(token_ids)
             mask_list.append(attention_mask)
@@ -165,14 +167,14 @@ def main(args: argparse.Namespace) -> None:
         output = tf.stack(out)
         dataset = tf.data.Dataset.from_tensor_slices((in_tokens, in_masks, output))
         dataset = dataset.map(group_inputs)
-        dataset = dataset.shuffle(len(dataset), seed=args.seed) if name == "train" else dataset
-        dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+        #dataset = dataset.shuffle(len(dataset), seed=args.seed) if name == "train" else dataset
+        #dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
+        #dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
 
-    train, dev, test = create_dataset("train"), create_dataset("dev"), create_dataset("test")
+    #train, dev, test = create_dataset("train"), create_dataset("dev"), create_dataset("test")
 
-    '''if os.path.exists("train_data"):
+    if os.path.exists("train_data"):
         train = tf.data.Dataset.load("train_data")
         dev = tf.data.Dataset.load("dev_data")
         test = tf.data.Dataset.load("test_data")
@@ -182,7 +184,12 @@ def main(args: argparse.Namespace) -> None:
         train.save("train_data")
         dev.save("dev_data")
         test.save("test_data")
-        print("Data created")'''
+        print("Data created")
+    
+    for dataset in [train, dev, test]:
+        dataset = dataset.shuffle(len(dataset), seed=args.seed) if name == "train" else dataset
+        dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
     """for ex in train:
         print(ex)
