@@ -186,10 +186,16 @@ def main(args: argparse.Namespace) -> None:
         test.save("test_data")
         print("Data created")
     
-    for dataset in [train, dev, test]:
-        dataset = dataset.shuffle(len(dataset), seed=args.seed) if name == "train" else dataset
-        dataset = dataset.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    train = train.shuffle(len(train), seed=args.seed)
+    train = train.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
+    train = train.prefetch(tf.data.AUTOTUNE)
+
+    #dev = dev.shuffle(len(dev), seed=args.seed)   
+    dev = dev.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
+    dev = dev.prefetch(tf.data.AUTOTUNE)
+  
+    test = test.apply(tf.data.experimental.dense_to_ragged_batch(args.batch_size))
+    test = test.prefetch(tf.data.AUTOTUNE)
 
     """for ex in train:
         print(ex)
