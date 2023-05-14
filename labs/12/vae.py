@@ -13,6 +13,12 @@ tf.get_logger().addFilter(lambda m: "Analyzer.lamba_check" not in m.getMessage()
 
 from mnist import MNIST
 
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
+
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--batch_size", default=50, type=int, help="Batch size.")
@@ -27,6 +33,31 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--train_size", default=None, type=int, help="Limit on the train set size.")
 parser.add_argument("--z_dim", default=100, type=int, help="Dimension of Z.")
 # If you add more arguments, ReCodEx will keep them with your default values.
+
+
+class VAE_encoder(tf.keras.Model):
+    def __init__(self, args: argparse.Namespace) -> None:
+        inputs = tf.keras.layers.Input(shape=[MNIST.H, MNIST.W, MNIST.C], dtype=tf.float32)
+        flat = tf.keras.layers.Flatten()(inputs)
+        dense_layers = []
+        for dim in args.encoder_layers:
+            dense_layers.append(tf.keras.layers.Dense(dim, activation='relu'))
+        hidden = tf.keras.Sequential(dense_layers)(flat)
+        z_mean = tf.keras.layers.Dense(args.z_dim)(hidden)
+        z_sd = tf.keras.layers.Dense(args.z_dim, activation='exponential')(hidden)
+        super().__init__(inputs=inputs, outputs=(z_mean, z_sd))
+
+
+class VAE_decoder(tf.keras.Model):
+    def __init__(self, args: argparse.Namespace) -> None:
+        inputs = tf.keras.layers.Input(shape=[args.z_dim], dtype=tf.float32)
+        dense_layers = []
+        for dim in args.decoder_layers:
+            dense_layers.append(tf.keras.layers.Dense(dim, activation='relu'))
+        hidden = tf.keras.Sequential(dense_layers)(inputs)
+        out = tf.keras.layers.Dense(MNIST.H * MNIST.W * MNIST.C, activation='sigmoid')(hidden)
+        out = tf.keras.layers.Reshape([MNIST.H, MNIST.W, MNIST.C])(out)
+        super().__init__(inputs=inputs, outputs=out)
 
 
 # The VAE model
@@ -46,7 +77,7 @@ class VAE(tf.keras.Model):
         # - generates two outputs `z_mean` and `z_sd`, each passing the result
         #   of the above bullet through its own dense layer of `args.z_dim` units,
         #   with `z_sd` using exponential function as activation to keep it positive.
-        self.encoder = ...
+        self.encoder = VAE_encoder(args)
 
         # TODO: Define `self.decoder` as a `tf.keras.Model`, which
         # - takes vectors of `[args.z_dim]` shape on input
@@ -55,7 +86,7 @@ class VAE(tf.keras.Model):
         # - applies output dense layer with `MNIST.H * MNIST.W * MNIST.C` units
         #   and a suitable output activation
         # - reshapes the output (`tf.keras.layers.Reshape`) to `[MNIST.H, MNIST.W, MNIST.C]`
-        self.decoder = ...
+        self.decoder = VAE_decoder(args)
 
         self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
 
@@ -63,6 +94,7 @@ class VAE(tf.keras.Model):
         with tf.GradientTape() as tape:
             # TODO: Compute `z_mean` and `z_sd` of the given images using `self.encoder`.
             # Note that you should pass `training=True` to the `self.encoder`.
+            z_mean, z_sd = self.encoder.call(images, training=True)
 
             # TODO: Sample `z` from a Normal distribution with mean `z_mean` and
             # standard deviation `z_sd`. Start by creating corresponding
@@ -73,22 +105,28 @@ class VAE(tf.keras.Model):
             # so you do not need to implement the reparametrization trick manually.
             # For a given distribution, you can use the `reparameterization_type` member
             # to check if it is reparametrized or not.
+            dist = tfp.distributions.Normal(z_mean, z_sd)
+            z = dist.sample(seed=self._seed)
 
             # TODO: Decode images using `z` (also passing `training=True` to the `self.decoder`).
+            out = self.decoder.call(z, training=True)
 
             # TODO: Define `reconstruction_loss` using the `self.compiled_loss`.
-            reconstruction_loss = ...
+            reconstruction_loss = self.compiled_loss(images, out)
 
             # TODO: Define `latent_loss` as a mean of KL divergences of suitable distributions.
             # Note that the `tfp` distributions offer a method `kl_divergence`.
-            latent_loss = ...
+            latent_loss = tf.reduce_mean(tfp.distributions.kl_divergence(dist, tfp.distributions.Normal(0, 1)))
 
             # TODO: Define `loss` as a sum of the `reconstruction_loss` (multiplied by the number
             # of pixels in an image) and the `latent_loss` (multiplied by self._z_dim).
-            loss = ...
+            loss = reconstruction_loss * MNIST.H * MNIST.W + latent_loss * self._z_dim
 
         # TODO: Perform a single optimizer step, with respect to trainable variables
         # of both the encoder and the decoder.
+        train_vars = self.trainable_variables
+        gradients = tape.gradient(loss, train_vars)
+        self.optimizer.apply_gradients(zip(gradients, train_vars))
 
         return {"reconstruction_loss": reconstruction_loss, "latent_loss": latent_loss, "loss": loss}
 

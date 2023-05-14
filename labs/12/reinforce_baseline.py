@@ -9,6 +9,12 @@ import tensorflow as tf
 
 import wrappers
 
+
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
+
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
