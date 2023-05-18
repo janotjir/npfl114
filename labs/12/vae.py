@@ -114,11 +114,11 @@ class VAE(tf.keras.Model):
             # TODO: Define `reconstruction_loss` using the `self.compiled_loss`.
             reconstruction_loss = self.compiled_loss(images, out)
 
-            # TODO: Define `latent_loss` as a mean of KL divergences of suitable distributions.
+            # TODO: Compute `latent_loss` as a mean of KL divergences of suitable distributions.
             # Note that the `tfp` distributions offer a method `kl_divergence`.
             latent_loss = tf.reduce_mean(tfp.distributions.kl_divergence(dist, tfp.distributions.Normal(0, 1)))
 
-            # TODO: Define `loss` as a sum of the `reconstruction_loss` (multiplied by the number
+            # TODO: Compute `loss` as a sum of the `reconstruction_loss` (multiplied by the number
             # of pixels in an image) and the `latent_loss` (multiplied by self._z_dim).
             loss = reconstruction_loss * MNIST.H * MNIST.W + latent_loss * self._z_dim
 
