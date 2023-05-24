@@ -23,10 +23,10 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=..., type=int, help="Batch size.")
-parser.add_argument("--episodes", default=..., type=int, help="Training episodes.")
-parser.add_argument("--hidden_layer_size", default=..., type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=..., type=float, help="Learning rate.")
+parser.add_argument("--batch_size", default=5, type=int, help="Batch size.")
+parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--hidden_layer_size", default=128, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 
 
 class Agent:
@@ -35,7 +35,14 @@ class Agent:
         # it is stored as `self._model`.
         #
         # Using Adam optimizer with given `args.learning_rate` is a good default.
-        raise NotImplementedError()
+        # raise NotImplementedError()
+        self._model = tf.keras.Sequential()
+        self._model.add(tf.keras.layers.Input(shape=(4,)))
+        self._model.add(tf.keras.layers.Dense(args.hidden_layer_size, activation='tanh', input_shape=[4]))
+        self._model.add(tf.keras.layers.Dense(2, activation=tf.nn.softmax))
+        self._model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=args.learning_rate), 
+                            loss=tf.keras.losses.SparseCategoricalCrossentropy())
+
 
     # Define a training method.
     #
@@ -49,7 +56,14 @@ class Agent:
         # the `__call__` method of a suitable subclass of `tf.losses.Loss`,
         # but you can also construct a loss instance with `reduction=tf.losses.Reduction.NONE`
         # and perform the weighting manually.
-        raise NotImplementedError()
+        # raise NotImplementedError()
+        with tf.GradientTape() as tape:
+            preds = self._model(states)
+            loss = self._model.compiled_loss(y_true=actions, y_pred=preds, sample_weight=returns)
+        grads = tape.gradient(loss, self._model.trainable_variables)
+        self._model.optimizer.apply_gradients(zip(grads, self._model.trainable_variables))
+
+
 
     # Predict method, again with the `raw_tf_function` for efficiency.
     @wrappers.raw_tf_function(dynamic_dims=1)
@@ -81,7 +95,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 # TODO: Choose `action` according to probabilities
                 # distribution (see `np.random.choice`), which you
                 # can compute using `agent.predict` and current `state`.
-                action = ...
+                probabilities = agent.predict(tf.expand_dims(state, axis=0))[0]
+                action = np.random.choice(2, p=probabilities)
 
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
@@ -93,17 +108,23 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 state = next_state
 
             # TODO: Compute returns from the received rewards
+            returns = [np.sum(rewards[i:]) for i in range(len(rewards))]
 
             # TODO: Add states, actions and returns to the training batch
+            batch_states.extend(states)
+            batch_actions.extend(actions)
+            batch_returns.extend(returns)
 
         # TODO: Train using the generated batch.
+        agent.train(batch_states, batch_actions, batch_returns)
 
     # Final evaluation
     while True:
         state, done = env.reset(start_evaluation=True)[0], False
         while not done:
             # TODO: Choose a greedy action
-            action = ...
+            action = agent.predict(tf.expand_dims(state, axis=0))[0]
+            action = tf.math.argmax(action).numpy()
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
