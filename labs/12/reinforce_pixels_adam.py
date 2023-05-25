@@ -28,7 +28,12 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--evaluate", default=False, action="store_true", help="Just evaluate, no training")
 parser.add_argument("--batch_size", default=1, type=int, help="Batch size.")
 parser.add_argument("--episodes", default=2000, type=int, help="Training episodes.")
+<<<<<<< HEAD:labs/12/reinforce_pixels_adam.py
 parser.add_argument("--learning_rate", default=0.0001, type=float, help="Learning rate.")
+=======
+parser.add_argument("--learning_rate", default=1e-4, type=float, help="Learning rate.")
+parser.add_argument("--model_path", default="", type=str, help="Specify model logdir")
+>>>>>>> fe74823b9dff19d9084a4da71e1c4baa4ff8f344:labs/12/reinforce_pixels.py
 
 parser.add_argument("--model_path", default="", type=str, help="load model.")
 
@@ -72,8 +77,8 @@ class Agent:
         #hidden = tf.keras.layers.Lambda(lambda z: tf.keras.backend.mean(z, [1, 2]), name='reduce_mean')(hidden)
         hidden = tf.keras.layers.Flatten()(hidden)
         
-        print(hidden.shape)
-        #hidden = tf.keras.layers.Dense(64, activation='relu')(hidden)
+        # print(hidden.shape)
+        # hidden = tf.keras.layers.Dense(32, activation='relu')(hidden)
 
         # heads
         action_out = tf.keras.layers.Dense(2, activation=tf.nn.softmax)(hidden)
@@ -119,23 +124,6 @@ class Agent:
     def predict(self, states: np.ndarray) -> np.ndarray:
         return self._model(states)
 
-    def _res_block(self, input, filters, kernels=(3,3), stride=(2,2), residual=True):
-        hidden = tf.keras.layers.Conv2D(filters, kernels[0], padding='same', activation=None, use_bias=False)(input)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.Activation('relu')(hidden)
-
-        hidden = tf.keras.layers.Conv2D(filters, kernels[1], strides=stride, padding='same', activation=None, use_bias=False)(hidden)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-
-        if residual:
-            input = tf.keras.layers.AveragePooling2D(stride, strides=stride, padding='same')(input)
-            input = tf.keras.layers.Conv2D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
-            input = tf.keras.layers.BatchNormalization()(input)
-            hidden = tf.keras.layers.add([hidden, input])
-
-        hidden = tf.keras.layers.Activation('relu')(hidden)
-
-        return hidden
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set the random seed and the number of threads.
@@ -156,6 +144,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
     if not args.recodex and not args.evaluate:
         # TODO: Perform training
+        os.makedirs(args.logdir, exist_ok=True)
         
         # Construct the agent
         agent = Agent(env, args)
