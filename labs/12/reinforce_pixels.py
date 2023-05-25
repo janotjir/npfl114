@@ -6,6 +6,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by d
 import gymnasium as gym
 import numpy as np
 import tensorflow as tf
+import datetime
 
 import cart_pole_pixels_environment
 import wrappers
@@ -20,14 +21,15 @@ parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--debug", default=False, action="store_true", help="If given, run functions eagerly.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
-parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
+parser.add_argument("--render_each", default=500, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--evaluate", default=False, action="store_true", help="Just evaluate, no training")
-parser.add_argument("--batch_size", default=32, type=int, help="Batch size.")
-parser.add_argument("--episodes", default=5000, type=int, help="Training episodes.")
-parser.add_argument("--learning_rate", default=0.0001, type=float, help="Learning rate.")
+parser.add_argument("--batch_size", default=1, type=int, help="Batch size.")
+parser.add_argument("--episodes", default=2000, type=int, help="Training episodes.")
+parser.add_argument("--learning_rate", default=1e-4, type=float, help="Learning rate.")
+parser.add_argument("--model_path", default="", type=str, help="Specify model logdir")
 
 
 
@@ -48,29 +50,29 @@ class Agent:
         inputs = tf.image.convert_image_dtype(inputs, tf.float32)
         
         # backbone
-        hidden = tf.keras.layers.Conv2D(2*4, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(inputs)
+        hidden = tf.keras.layers.Conv2D(4, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(inputs)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
         hidden = tf.keras.layers.Activation('relu')(hidden)
 
-        hidden = tf.keras.layers.Conv2D(8*2, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(hidden)
+        hidden = tf.keras.layers.Conv2D(8, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(hidden)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
         hidden = tf.keras.layers.Activation('relu')(hidden)
 
-        hidden = tf.keras.layers.Conv2D(16*2, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(hidden)
+        hidden = tf.keras.layers.Conv2D(16, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(hidden)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
         hidden = tf.keras.layers.Activation('relu')(hidden)
 
-        hidden = tf.keras.layers.Conv2D(32*2, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(hidden)
+        hidden = tf.keras.layers.Conv2D(32, kernel_size=3, strides=2, padding='same', activation=None, use_bias=False)(hidden)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
         hidden = tf.keras.layers.Activation('relu')(hidden)
 
         #hidden = tf.keras.layers.MaxPooling2D()(hidden)
-        hidden = tf.keras.layers.Lambda(lambda z: tf.keras.backend.mean(z, [3]), name='reduce_mean')(hidden)
+        #hidden = tf.keras.layers.Lambda(lambda z: tf.keras.backend.mean(z, [3]), name='reduce_mean')(hidden)
         #hidden = tf.keras.layers.Lambda(lambda z: tf.keras.backend.mean(z, [1, 2]), name='reduce_mean')(hidden)
         hidden = tf.keras.layers.Flatten()(hidden)
         
-        print(hidden.shape)
-        #hidden = tf.keras.layers.Dense(64, activation='relu')(hidden)
+        # print(hidden.shape)
+        # hidden = tf.keras.layers.Dense(32, activation='relu')(hidden)
 
         # heads
         action_out = tf.keras.layers.Dense(2, activation=tf.nn.softmax)(hidden)
@@ -116,23 +118,6 @@ class Agent:
     def predict(self, states: np.ndarray) -> np.ndarray:
         return self._model(states)
 
-    def _res_block(self, input, filters, kernels=(3,3), stride=(2,2), residual=True):
-        hidden = tf.keras.layers.Conv2D(filters, kernels[0], padding='same', activation=None, use_bias=False)(input)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.Activation('relu')(hidden)
-
-        hidden = tf.keras.layers.Conv2D(filters, kernels[1], strides=stride, padding='same', activation=None, use_bias=False)(hidden)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-
-        if residual:
-            input = tf.keras.layers.AveragePooling2D(stride, strides=stride, padding='same')(input)
-            input = tf.keras.layers.Conv2D(filters, kernel_size=1, strides=1, padding='same', activation=None, use_bias=False)(input)
-            input = tf.keras.layers.BatchNormalization()(input)
-            hidden = tf.keras.layers.add([hidden, input])
-
-        hidden = tf.keras.layers.Activation('relu')(hidden)
-
-        return hidden
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set the random seed and the number of threads.
@@ -144,8 +129,14 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         tf.config.run_functions_eagerly(True)
         # tf.data.experimental.enable_debug_mode()
 
+    args.logdir = os.path.join("logs", "{}-{}".format(
+        os.path.basename(globals().get("__file__", "notebook")),
+        datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    ))
+
     if not args.recodex and not args.evaluate:
         # TODO: Perform training
+        os.makedirs(args.logdir, exist_ok=True)
         
         # Construct the agent
         agent = Agent(env, args)
@@ -185,11 +176,14 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             agent.train(batch_states, batch_actions, batch_returns)
 
         # TODO: save trained model
-       
+        agent._model.save_weights(os.path.join(args.logdir, 'policy_model'))
+        agent._model_baseline.save_weights(os.path.join(args.logdir, 'baseline_model'))
         
     else:
         # TODO: Load a pre-trained agent and evaluate it.
-        pass
+        agent = Agent(env, args)
+        agent._model.load_weights(os.path.join(args.model_path, "policy_model"))
+        agent._model_baseline.load_weights(os.path.join(args.model_path, 'baseline_model'))
     
     while True:
         state, done = env.reset(start_evaluation=True)[0], False
