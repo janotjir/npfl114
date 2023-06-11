@@ -12,6 +12,10 @@ tf.get_logger().addFilter(lambda m: "Analyzer.lamba_check" not in m.getMessage()
 
 from image64_dataset import Image64Dataset
 
+# Team members:
+# 4c2c10df-00be-4008-8e01-1526b9225726
+# dc535248-fa6c-4987-b49f-25b6ede7c87d
+
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")

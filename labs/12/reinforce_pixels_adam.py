@@ -28,14 +28,8 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--evaluate", default=False, action="store_true", help="Just evaluate, no training")
 parser.add_argument("--batch_size", default=1, type=int, help="Batch size.")
 parser.add_argument("--episodes", default=2000, type=int, help="Training episodes.")
-<<<<<<< HEAD:labs/12/reinforce_pixels_adam.py
-parser.add_argument("--learning_rate", default=0.0001, type=float, help="Learning rate.")
-=======
 parser.add_argument("--learning_rate", default=1e-4, type=float, help="Learning rate.")
 parser.add_argument("--model_path", default="", type=str, help="Specify model logdir")
->>>>>>> fe74823b9dff19d9084a4da71e1c4baa4ff8f344:labs/12/reinforce_pixels.py
-
-parser.add_argument("--model_path", default="", type=str, help="load model.")
 
 
 
