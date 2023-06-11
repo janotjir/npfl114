@@ -46,9 +46,6 @@ class Model(tf.keras.Model):
             self.expanding_dense = tf.keras.layers.Dense(dim * expansion, activation='relu')
             self.squishing_dense = tf.keras.layers.Dense(dim, activation=None)
 
-        def get_config(self):
-            return {"dim": self.dim, "expansion": self.expansion}
-
         def call(self, inputs):
             # TODO: Execute the FFN Transformer layer.
             # raise NotImplementedError()
@@ -69,9 +66,6 @@ class Model(tf.keras.Model):
             self.W_K = self.add_weight(name="W_K", shape=[dim, dim])
             self.W_V = self.add_weight(name="W_V", shape=[dim, dim])
             self.W_O = self.add_weight(name="W_O", shape=[dim, dim])
-
-        def get_config(self):
-            return {"dim": self.dim, "heads": self.heads}
 
         def call(self, inputs, mask):
             # TODO: Execute the self-attention layer.
@@ -126,16 +120,13 @@ class Model(tf.keras.Model):
             super().__init__(*args, **kwargs)
             self.dim = dim
 
-        def get_config(self):
-            return {"dim": self.dim}
-
         def call(self, inputs):
-            # TODO: Compute the sinusoidal positional embeddings.
-            # They have a shape `[max_sentence_len, self.dim]`, where `self.dim` is even and
-            # - for `0 <= i < dim / 2`, the value on index `[pos, i]` should be
-            #     `sin(pos / 10_000 ** (2 * i / dim))`
-            # - the value on index `[pos, i]` for `i >= dim / 2` should be
-            #     `cos(pos / 10_000 ** (2 * (i - dim/2) / dim))`
+            # TODO: Compute the sinusoidal positional embeddings. Recalling that `self.dim` is even,
+            # the embeddings have a shape `[max_sentence_len, self.dim]`, and for `0 <= i < dim/2`:
+            # - the value on index `[pos, i]` should be
+            #     `sin(pos / 10_000 ** (2 * i / self.dim))`
+            # - the value on index `[pos, self.dim/2 + i]` should be
+            #     `cos(pos / 10_000 ** (2 * i / self.dim))`
             # - the `0 <= pos < max_sentence_len` is the sentence index.
             # This order is the same as in the visualization on the slides, but
             # different from the original paper where `sin` and `cos` interleave.
@@ -171,9 +162,6 @@ class Model(tf.keras.Model):
             for i in range(layers):
                 self.SA_layers.append([tf.keras.layers.LayerNormalization(), Model.SelfAttention(dim, heads), tf.keras.layers.Dropout(dropout)])
                 self.FFN_layers.append([tf.keras.layers.LayerNormalization(), Model.FFN(dim, expansion), tf.keras.layers.Dropout(dropout)])
-
-        def get_config(self):
-            return {name: getattr(self, name) for name in ["layers", "dim", "expansion", "heads", "dropout"]}
 
         def call(self, inputs, mask):
             # TODO: First compute the positional embeddings.
