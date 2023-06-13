@@ -13,12 +13,6 @@ tf.get_logger().addFilter(lambda m: "Analyzer.lamba_check" not in m.getMessage()
 
 from mnist import MNIST
 
-
-# Team members:
-# 4c2c10df-00be-4008-8e01-1526b9225726
-# dc535248-fa6c-4987-b49f-25b6ede7c87d
-
-
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--batch_size", default=50, type=int, help="Batch size.")
@@ -27,7 +21,7 @@ parser.add_argument("--debug", default=False, action="store_true", help="If give
 parser.add_argument("--epochs", default=50, type=int, help="Number of epochs.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Evaluation in ReCodEx.")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
-parser.add_argument("--threads", default=12, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 parser.add_argument("--train_size", default=None, type=int, help="Limit on the train set size.")
 parser.add_argument("--z_dim", default=100, type=int, help="Dimension of Z.")
 # If you add more arguments, ReCodEx will keep them with your default values.
@@ -35,65 +29,72 @@ parser.add_argument("--z_dim", default=100, type=int, help="Dimension of Z.")
 
 class Generator(tf.keras.Model):
     # - takes vectors of shape `[args.z_dim]` on input
-    # - applies batch normalized dense layer with 1_024 units and ReLU
-    #   (do not forget about `use_bias=False` before every batch normalization)
-    # - applies batch normalized dense layer with `MNIST.H // 4 * MNIST.W // 4 * 64` units and ReLU
-    # - reshapes the current hidden output to `[MNIST.H // 4, MNIST.W // 4, 64]`
-    # - applies batch normalized transposed convolution with 32 filters, kernel size 4,
-    #   stride 2, same padding, and ReLU activation (again `use_bias=False`)
-    # - applies transposed convolution with `MNIST.C` filters, kernel size 4,
-    #   stride 2, same padding, and a suitable output activation
+        # - applies batch normalized dense layer with 1_024 units and ReLU
+        #   (do not forget about `use_bias=False` before every batch normalization)
+        # - applies batch normalized dense layer with `MNIST.H // 4 * MNIST.W // 4 * 64` units and ReLU
+        # - reshapes the current hidden output to `[MNIST.H // 4, MNIST.W // 4, 64]`
+        # - applies batch normalized transposed convolution with 32 filters, kernel size 4,
+        #   stride 2, same padding, and ReLU activation (again `use_bias=False`)
+        # - applies transposed convolution with `MNIST.C` filters, kernel size 4,
+        #   stride 2, same padding, and a suitable output activation
     def __init__(self, args: argparse.Namespace) -> None:
         inputs = tf.keras.layers.Input([args.z_dim])
+
         hidden = tf.keras.layers.Dense(1024, use_bias=False)(inputs)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.ReLU()(hidden)
+        hidden = tf.keras.layers.Activation(tf.nn.relu)(hidden)
 
         hidden = tf.keras.layers.Dense(MNIST.H // 4 * MNIST.W // 4 * 64, use_bias=False)(hidden)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.ReLU()(hidden)
+        hidden = tf.keras.layers.Activation(tf.nn.relu)(hidden)
 
         hidden = tf.keras.layers.Reshape([MNIST.H // 4, MNIST.W // 4, 64])(hidden)
-        hidden = tf.keras.layers.Conv2DTranspose(
-            32, kernel_size=4, strides=2, padding='same', use_bias=False)(hidden)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.ReLU()(hidden)
 
-        out = tf.keras.layers.Conv2DTranspose(
-            MNIST.C, kernel_size=4, strides=2, padding='same', activation='sigmoid')(hidden)
-        super().__init__(inputs=inputs, outputs=out)
+        hidden = tf.keras.layers.Conv2DTranspose(filters=32, kernel_size=4, strides=2, padding='same', use_bias=False, activation=None)(hidden)
+        hidden = tf.keras.layers.BatchNormalization()(hidden)
+        hidden = tf.keras.layers.Activation(tf.nn.relu)(hidden)
+
+        output = tf.keras.layers.Conv2DTranspose(filters=MNIST.C, kernel_size=4, strides=2, padding='same', activation=tf.nn.sigmoid)(hidden)
+
+        super().__init__(inputs=inputs, outputs=output)
 
 
 class Discriminator(tf.keras.Model):
     # - takes input images with shape `[MNIST.H, MNIST.W, MNIST.C]`
-    # - computes batch normalized convolution with 32 filters, kernel size 5,
-    #   same padding, and ReLU activation (again, do not forget about
-    #   `use_bias=False` before every batch normalization).
-    # - max-pools with pool size 2 and stride 2
-    # - computes batch normalized convolution with 64 filters, kernel size 5,
-    #   same padding, and ReLU activation
-    # - max-pools with pool size 2 and stride 2
-    # - flattens the current representation
-    # - applies batch normalized dense layer with 1_024 units and ReLU activation
-    # - applies output dense layer with one output and a suitable activation function
+        # - computes batch normalized convolution with 32 filters, kernel size 5,
+        #   same padding, and ReLU activation (again, do not forget about
+        #   `use_bias=False` before every batch normalization).
+        # - max-pools with pool size 2 and stride 2
+        # - computes batch normalized convolution with 64 filters, kernel size 5,
+        #   same padding, and ReLU activation
+        # - max-pools with pool size 2 and stride 2
+        # - flattens the current representation
+        # - applies batch normalized dense layer with 1_024 units and ReLU activation
+        # - applies output dense layer with one output and a suitable activation function
     def __init__(self, args: argparse.Namespace) -> None:
         inputs = tf.keras.layers.Input([MNIST.H, MNIST.W, MNIST.C])
-        hidden = tf.keras.layers.Conv2D(32, kernel_size=5, padding='same', use_bias=False)(inputs)
-        hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.ReLU()(hidden)
-        hidden = tf.keras.layers.MaxPool2D(2, strides=2)(hidden)
 
-        hidden = tf.keras.layers.Conv2D(64, kernel_size=5, padding='same', use_bias=False)(hidden)
+        hidden = tf.keras.layers.Conv2D(filters=32, kernel_size=5, padding='same', use_bias=False)(inputs)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.ReLU()(hidden)
-        hidden = tf.keras.layers.MaxPool2D(2, strides=2)(hidden)
+        hidden = tf.keras.layers.Activation(tf.nn.relu)(hidden)
+        
+        hidden = tf.keras.layers.MaxPool2D(pool_size=(2, 2), strides=(2, 2))(hidden)
+
+        hidden = tf.keras.layers.Conv2D(filters=64, kernel_size=5, padding='same', use_bias=False)(hidden)
+        hidden = tf.keras.layers.BatchNormalization()(hidden)
+        hidden = tf.keras.layers.Activation(tf.nn.relu)(hidden)
+
+        hidden = tf.keras.layers.MaxPool2D(pool_size=(2, 2), strides=(2, 2))(hidden)
 
         hidden = tf.keras.layers.Flatten()(hidden)
+
         hidden = tf.keras.layers.Dense(1024, use_bias=False)(hidden)
         hidden = tf.keras.layers.BatchNormalization()(hidden)
-        hidden = tf.keras.layers.ReLU()(hidden)
-        out = tf.keras.layers.Dense(1, activation='sigmoid')(hidden)
-        super().__init__(inputs=inputs, outputs=out)
+        hidden = tf.keras.layers.Activation(tf.nn.relu)(hidden)
+
+        output = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)(hidden)
+
+        super().__init__(inputs=inputs, outputs=output)
 
 
 # The GAN model
@@ -105,10 +106,10 @@ class GAN(tf.keras.Model):
         self._z_dim = args.z_dim
         self._z_prior = tfp.distributions.Normal(tf.zeros(args.z_dim), tf.ones(args.z_dim))
 
-        # TODO: Define `self.generator` as a `tf.keras.Model`
+        # TODO: Define `self.generator` as a `tf.keras.Model`, which
         self.generator = Generator(args)
 
-        # TODO: Define `self.discriminator` as a `tf.keras.Model`
+        # TODO: Define `self.discriminator` as a `tf.keras.Model`, which
         self.discriminator = Discriminator(args)
 
         self.tb_callback = tf.keras.callbacks.TensorBoard(args.logdir)
@@ -138,8 +139,8 @@ class GAN(tf.keras.Model):
         # Do not forget that we created generator_optimizer in the `compile` override.
         with tf.GradientTape() as tape:
             samp = self._z_prior.sample(tf.shape(images)[0], seed=self._seed)
-            fakes = self.generator.call(samp, training=True)
-            scores = self.discriminator.call(fakes, training=True)
+            fakes = self.generator(samp, training=True)
+            scores = self.discriminator(fakes, training=True)
             generator_loss = self.compiled_loss(tf.ones_like(scores), scores)
         train_vars = self.generator.trainable_variables
         gradients = tape.gradient(generator_loss, train_vars)
@@ -156,8 +157,8 @@ class GAN(tf.keras.Model):
         # Then, run an optimizer step with respect to discriminator trainable variables.
         # Do not forget that we created discriminator_optimizer in the `compile` override.
         with tf.GradientTape() as tape:
-            discriminated_real = self.discriminator.call(images, training=True)
-            discriminated_fake = self.discriminator.call(fakes, training=True)
+            discriminated_real = self.discriminator(images, training=True)
+            discriminated_fake = self.discriminator(fakes, training=True)
             real_loss = self.compiled_loss(tf.ones_like(discriminated_real), discriminated_real)
             fake_loss = self.compiled_loss(tf.zeros_like(discriminated_fake), discriminated_fake)
             discriminator_loss = real_loss + fake_loss
