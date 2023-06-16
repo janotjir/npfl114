@@ -10,6 +10,8 @@ import numpy as np
 import tensorflow as tf
 tf.get_logger().addFilter(lambda m: "Analyzer.lamba_check" not in m.getMessage())  # Avoid pesky warning
 
+import math
+
 from image64_dataset import Image64Dataset
 
 # Team members:
@@ -52,28 +54,39 @@ class SinusoidalEmbedding(tf.keras.layers.Layer):
         #     `sin(2 * pi * inputs / 20 ** (2 * i / self.dim))`
         # - the value on index `[..., self.dim/2 + i]` should be
         #     `cos(2 * pi * inputs / 20 ** (2 * i / self.dim))`
-        raise NotImplementedError()
-
+        sins = tf.math.sin(2 * math.pi * inputs / 20 ** (2 * tf.range(0, self.dim/2) / self.dim))
+        coss = tf.math.cos(2 * math.pi * inputs / 20 ** (2 * tf.range(0, self.dim/2) / self.dim))
+        #raise NotImplementedError()
+        return tf.concat([sins, coss], axis=-1)
+        
 
 def ResidualBlock(inputs, width, noise_embeddings):
     """A residual block with two BN+Swish+3x3Conv, adding noise embeddings in the middle."""
     # TODO: Compute the residual connection. If the number of filters
     # in the input is the same as `width`, use unmodified `inputs`; otherwise,
     # pass it through a 1x1 convolution with `width` filters.
-    residual = ...
+    if inputs.shape[-1] != width:
+        residual = tf.keras.layers.Conv2D(width, kernel_size=1)(inputs)
+    else:
+        residual = inputs
 
     # TODO: Pass `inputs` through a BatchNormalization, Swish activation, and 3x3 convolution
     # with "same" padding and no bias (because it will be processed by a later batch normalization).
-    hidden = ...
+    hidden = tf.keras.layers.BatchNormalization()(inputs)
+    hidden = tf.keras.activations.swish(hidden)
+    hidden = tf.keras.layers.Conv2D(width, 3, padding='same', use_bias=False)(hidden)
+
 
     # TODO: Pass `noise_embeddings` through a dense layer with `width` outputs and Swish
     # activation, and add it to `hidden`.
-    hidden += ...
+    hidden += tf.keras.layers.Dense(width, activation=tf.keras.activations.swish)(noise_embeddings)
 
     # TODO: Pass `hidden` through another BatchNormalization, Swish activation, and 3x3 convolution
     # with "same" padding and no bias. Furthermore, initialize the kernel of the convolution to all
     # zeros, so that after initialization, the whole residual block is an identity.
-    hidden = ...
+    hidden = tf.keras.layers.BatchNormalization()(hidden)
+    hidden = tf.keras.activations.swish(hidden)
+    hidden = tf.keras.layers.Conv2D(width, 3, padding='same', use_bias=False, kernel_initializer='zeros')(hidden)
 
     hidden += residual
     return hidden
@@ -89,11 +102,11 @@ class DDIM(tf.keras.Model):
         noise_rates = tf.keras.layers.Input([1, 1, 1])
 
         # TODO: Embed noise rates using the `SinusoidalEmbedding` with `args.channels` dimensions.
-        noise_embedding = ...
+        noise_embedding = SinusoidalEmbedding(args.channels)(noise_rates)
 
         # TODO: Process `images` using an initial 3x3 convolution with `args.channels` filters
         # and "same" padding.
-        hidden = ...
+        hidden = tf.keras.layers.Conv2D(args.channels, 3, padding='same')(images)
 
         # Downscaling stages
         outputs = []
@@ -101,26 +114,31 @@ class DDIM(tf.keras.Model):
             # TODO: For `args.stage_blocks` times, pass the `hidden` through a `ResidualBlock`
             # with `args.channels << i` filters and with the `noise_embedding`, and append
             # every result to the `outputs` array.
-            ...
+            for j in range(args.stage_blocks):
+                hidden = ResidualBlock(hidden, args.channels << i, noise_embedding)
+                outputs.append(hidden)
 
             # TODO: Downscale `hidden` with a 3x3 convolution with stride 2,
             # `args.channels << (i + 1)` filters, and "same" padding.
-            hidden = ...
+            hidden = tf.keras.layers.Conv2D(args.channels << (i+1), 3, strides=2, padding='same')(hidden)
 
         # Middle block
         # TODO: For `args.stage_blocks` times, pass the `hidden` through a `ResidualBlock`
         # with `args.channels << args.stages` filters.
-        ...
+        for i in range(args.stage_blocks):
+            hidden = ResidualBlock(hidden, args.channels << args.stages, noise_embedding)
 
         # Upscaling stages
         for i in reversed(range(args.stages)):
             # TODO: Upscale `hidden` with a 4x4 transposed convolution with stride 2,
             # `args.channels << i` filters, and "same" padding.
-            hidden = ...
+            hidden = tf.keras.layers.Conv2DTranspose(args.channels << i, 4, strides=2, padding='same')(hidden)
 
             # TODO: For `args.stage_blocks` times, concatenate `hidden` and `outputs.pop()`,
             # and pass the result through a `ResidualBlock` with `args.channels << i` filters.
-            ...
+            for j in range(args.stage_blocks):
+                hidden = tf.concat([hidden, outputs.pop()], axis=-1)
+                hidden = ResidualBlock(hidden, args.channels << i, noise_embedding)
 
         # Verify that all outputs have been used.
         assert len(outputs) == 0
@@ -129,7 +147,9 @@ class DDIM(tf.keras.Model):
         # BatchNormalization, Swish activation, and a 3x3 convolution with
         # `Image64Dataset.C` channels and "same" padding, with kernel of
         # the convolution initialized to all zeros.
-        outputs = ...
+        outputs = tf.keras.layers.BatchNormalization()(hidden)
+        outputs = tf.keras.activations.swish(outputs)
+        outputs = tf.keras.layers.Conv2D(Image64Dataset.C, 3, padding='same', kernel_initializer='zeros')(outputs)
 
         self._network = tf.keras.Model(inputs=[images, noise_rates], outputs=outputs)
 
@@ -162,7 +182,9 @@ class DDIM(tf.keras.Model):
         # of 0.025 rad (for time 0) to `final_angle` of pi/2 - 0.025 rad (for time 1).
         # Because we use the rates as multipliers of image batches, reshape the rates
         # to a shape `[batch_size, 1, 1, 1]`, assuming `times` has a shape `[batch_size]`.
-        signal_rates, noise_rates = ...
+        angles = times * (np.pi/2 - 0.05) + 0.025
+        signal_rates = tf.cos(angles)[:, tf.newaxis, tf.newaxis, tf.newaxis]
+        noise_rates = tf.sin(angles)[:, tf.newaxis, tf.newaxis, tf.newaxis]
 
         return signal_rates, noise_rates
 
@@ -176,19 +198,19 @@ class DDIM(tf.keras.Model):
         times = tf.random.uniform(tf.shape(images)[:1], seed=self._seed)
 
         # TODO: Compute the signal and noise rates using the sampled `times`.
-        signal_rates, noise_rates = ...
+        signal_rates, noise_rates = self._diffusion_rates(times)
 
         # TODO: Compute the noisy images utilizing the computed signal and noise rates.
-        noisy_images = ...
+        noisy_images = signal_rates * images + noise_rates * noises
 
         with tf.GradientTape() as tape:
             # TODO: Predict the noise by running the `self._network` on the noisy images
             # and the noise rates. Do not forget to also pass the `training=True` argument
             # (to run batch normalizations in training regime).
-            predicted_noises = ...
+            predicted_noises = self._network(inputs=[noisy_images, noise_rates], training=True)
 
             # TODO: Compute loss using the `self.compiled_loss`.
-            loss = ...
+            loss = self.compiled_loss(noises, predicted_noises)
 
         # Perform an update step.
         self.optimizer.minimize(loss, self._network.trainable_variables, tape=tape)
@@ -214,24 +236,24 @@ class DDIM(tf.keras.Model):
             diffusion_process.append(self._image_denormalization(images))
 
             # TODO: Compute the signal and noise rates of the current time step.
-            signal_rates, noise_rates = ...
+            signal_rates, noise_rates = self._diffusion_rates(times)
 
             # TODO: Predict the noise by calling the `self._ema_network` with `training=False`.
-            predicted_noises = ...
+            predicted_noises = self._ema_network(inputs=[images, noise_rates], training=False)
 
             # TODO: Predict the denoised version of `images` (i.e., the $x_0$ estimate
             # in the DDIM sampling algorithm).
-            denoised_images = ...
+            denoised_images = (images - noise_rates * predicted_noises) / signal_rates
 
             # TODO: Compute the signal and noise rates of the next time step.
-            next_signal_rates, next_noise_rates = ...
+            next_signal_rates, next_noise_rates = self._diffusion_rates(next_times)
 
             # TODO: Update the `images` according to the DDIM sampling algorithm.
-            images = ...
+            images = next_signal_rates * denoised_images + next_noise_rates * predicted_noises
 
         # TODO: Compute the output by passing the latest `denoised_images` through
         # the `self._image_denormalization` to obtain a `tf.uint8` representation.
-        images = ...
+        images = self._image_denormalization(denoised_images)
 
         return images, diffusion_process
 
