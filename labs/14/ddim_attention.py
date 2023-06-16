@@ -170,7 +170,7 @@ class DDIM(tf.keras.Model):
 
             # TODO: For the first `args.attention_stages` stages (the ones with the smallest
             # spatial resolution), pass `hidden` through a `SelfAttention`.
-            if i < args.attention_stages:
+            if i >= (args.stages - args.attention_stages):
                 hidden = SelfAttention(hidden, args.attention_heads)
 
         # Verify that all outputs have been used.
