@@ -86,8 +86,6 @@ class Model(tf.keras.Model):
             one_hot = tf.one_hot(y_true, tf.reduce_max(y_true) + 1)
             nth = tf.math.reduce_sum(tf.math.cumsum(one_hot, axis=-2) * one_hot, axis=-1)
             indices = tf.where(nth == self._nth)
-            print(y_true.shape)
-            print(y_pred.shape)
             return super().update_state(tf.gather_nd(y_true, indices), tf.gather_nd(y_pred, indices))
 
     class MemoryAugmentedLSTMCell(tf.keras.layers.AbstractRNNCell):
@@ -251,8 +249,8 @@ class Model(tf.keras.Model):
         self.compile(
             optimizer=tf.optimizers.Adam(jit_compile=False),
             loss=tf.losses.SparseCategoricalCrossentropy(),
-            metrics=None#[tf.metrics.SparseCategoricalAccuracy(name="acc"),
-                     #*[self.NthOccurenceAccuracy(i, name="acc{}".format(i)) for i in [1, 2, 5, 10]]],
+            metrics=[tf.metrics.SparseCategoricalAccuracy(name="acc"),
+                     *[self.NthOccurenceAccuracy(i, name="acc{}".format(i)) for i in [1, 2, 5, 10]]],
         )
 
 
